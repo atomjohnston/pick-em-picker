@@ -32,7 +32,9 @@ from toolz import interleave
 Game = namedtuple('Game', 'year week away away_pts home home_pts')
 Team = namedtuple('Team', 'name win_pct pyth_pct pts_per_game record')
 Record = namedtuple('Record', 'name points record')
-Prediction = namedtuple('Prediction', 'winner loser pyth_delta')
+Pick = namedtuple('Pick', 'won lost delta')
+Guess = namedtuple('Guess', ('away home pyth points '
+                             'wins spread pyth_spread'))
 
 
 def team_calculator(games):
@@ -95,26 +97,54 @@ def picker(file_name, year, week):
         with open(file_name, 'r') as fh:
             return [csv2game(line) for line in fh.readlines()]
 
-    def predict(away, home):
-        if away.pyth_pct > home.pyth_pct:
-            return Prediction(away, home, away.pyth_pct - home.pyth_pct)
+    def pick(away, a_val, home, h_val):
+        if a_val > h_val:
+            return Pick(away.name, home.name, a_val - h_val)
         else:
-            return Prediction(home, away, home.pyth_pct - away.pyth_pct)
+            return Pick(home.name, away.name, h_val - a_val)
+
+    def guess(away, home):
+        return Guess(
+            away=away, home=home,
+            pyth=pick(away, away.pyth_pct, home, home.pyth_pct),
+            points=pick(away, away.pts_per_game, home, home.pts_per_game),
+            wins=pick(away, away.win_pct, home, home.win_pct),
+            spread=pick(away, 0, home, 1),
+            pyth_spread=pick(away, 0, home, 1))
+
+    def format_guess(teams, guess):
+        return ','.join([str(m) for m in
+                        [x.away.name, x.home.name] +
+                        format_pick(teams, guess.pyth, 'pyth_pct') +
+                        format_pick(teams, guess.points, 'pts_per_game') +
+                        format_pick(teams, guess.wins, 'win_pct') +
+                        [guess.wins.won, guess.wins.delta] +
+                        [guess.pyth_spread.won, guess.pyth_spread.delta]])
+
+    def format_pick(teams, pick, attr):
+        return [pick.won, pick.delta,
+                getattr(teams[pick.won], attr),
+                getattr(teams[pick.lost], attr)]
 
     teams = team_calculator(get_games(file_name))
 
-    predict_week = [csv2game(line) 
-                    for line in score_scrape(year, week, -1).split('\n')]
+    predict_week = [csv2game(line) for line in
+                    score_scrape(year, week, -1).split('\n')]
 
-    # Prediction = namedtupel('Prediction', 'winner loser pyth_delta')
-    predictions = [predict(teams[game.away], teams[game.home]) for game in
+    predictions = [guess(teams[game.away], teams[game.home]) for game in
                    predict_week]
 
-    for x in sorted(predictions, key=lambda t: t.pyth_delta, reverse=True):
+    for x in sorted(predictions, key=lambda t: t.pyth.delta, reverse=True):
         print(x)
-    
-    for x in sorted(predictions, key=lambda t: t.pyth_delta, reverse=True):
-        print('{},{},{}'.format(x.winner.name, x.loser.name, x.pyth_delta))
+
+    print('away,home,'
+          'pyth_w,pyth\u0394,away_pyth,home_pyth,'
+          'points_w,points\u0394,away_pts,home_pts,'
+          'wins_w,wins\u0394,away_pct,home_pct,'
+          'spread_w,spread,'
+          'pyth_spread_w,pyth_spread\u0394')
+    for x in sorted(predictions, key=lambda t: t.pyth.delta, reverse=True):
+        print(format_guess(teams, x))
 
 
 def score_scrape(yr, wk_from, wk_to):
@@ -148,12 +178,14 @@ def score_scrape(yr, wk_from, wk_to):
 
     def scrape_single(yr, week):
         return '\n'.join([str.lower(game_csv(yr, week, game))
-                for game in select_games(fetch_page_html(yr, week))])
+                         for game in select_games(fetch_page_html(yr, week))])
 
     def scrape_weeks(yr, wk_from, wk_to):
         step = 1 if wk_from < wk_to else -1
         ex = futures.ThreadPoolExecutor(max_workers=4)
-        return '\n'.join(sorted(ex.map(scrape_single, repeat(yr), [wk for wk in range(wk_from, wk_to + step, step)]), reverse=True))
+        return '\n'.join(sorted(ex.map(
+            scrape_single, repeat(yr),
+            [wk for wk in range(wk_from, wk_to + step, step)]), reverse=True))
 
     return \
         scrape_single(yr, wk_from) if wk_to == -1 else \
