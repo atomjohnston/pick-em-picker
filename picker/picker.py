@@ -32,20 +32,13 @@ from toolz import interleave
 Game = namedtuple('Game', 'year week away away_pts home home_pts')
 Team = namedtuple('Team', 'name win_pct pyth_pct pts_per_game record')
 Record = namedtuple('Record', 'name points record')
+Prediction = namedtuple('Prediction', 'winner loser pyth_delta')
 
 
-def picker(file_name, year, week):
+def team_calculator(games):
 
     GAME_COUNT = 16
     EXP = 2.37
-
-    def new_game(year, week, away, ascore, home, hscore):
-        return Game(int(year), int(week), away, int(ascore), home, int(hscore))
-
-    def get_games(file_name):
-        with open(file_name, 'r') as fh:
-            return [new_game(*line.strip().split(','))
-                    for line in fh.readlines()]
 
     def add_records(r1, r2):
         if sum(r1.record) == GAME_COUNT:
@@ -73,9 +66,13 @@ def picker(file_name, year, week):
             add_records(
                 loser, Record(loser.name, (min(score), max(score)), (0, 1))))
 
+    def calc_team(name, rec):
+        return Team(name, rec.record[0]/GAME_COUNT,
+                    rec.points[0]**EXP/(rec.points[0]**EXP+rec.points[1]**EXP),
+                    operator.sub(*rec.points)/GAME_COUNT, rec)
     records = {}
 
-    for game in get_games(file_name):
+    for game in games:
         records[game.away] = get_record(game.away, records)
         records[game.home] = get_record(game.home, records)
         winner, loser = eval_game(
@@ -83,17 +80,44 @@ def picker(file_name, year, week):
         records[winner.name] = winner
         records[loser.name] = loser
 
-    teams = []
-    for team_name, rec in records.items():
-        teams.append(
-            Team(team_name, rec.record[0]/GAME_COUNT,
-                 rec.points[0]**EXP/(rec.points[0]**EXP+rec.points[1]**EXP),
-                 operator.sub(*rec.points)/GAME_COUNT, rec))
-        # for x in sorted(teams, key=lambda t: t.pyth_pct, reverse=True):
-        #     print(x)
+    return {team: calc_team(team, record) for team, record in records.items()}
 
 
-def score_scrape(yr, wk_from, wk_to, file_):
+def picker(file_name, year, week):
+
+    def new_game(year, week, away, ascore, home, hscore):
+        return Game(int(year), int(week), away, int(ascore), home, int(hscore))
+
+    def csv2game(line):
+        return new_game(*line.strip().split(','))
+
+    def get_games(file_name):
+        with open(file_name, 'r') as fh:
+            return [csv2game(line) for line in fh.readlines()]
+
+    def predict(away, home):
+        if away.pyth_pct > home.pyth_pct:
+            return Prediction(away, home, away.pyth_pct - home.pyth_pct)
+        else:
+            return Prediction(home, away, home.pyth_pct - away.pyth_pct)
+
+    teams = team_calculator(get_games(file_name))
+
+    predict_week = [csv2game(line) 
+                    for line in score_scrape(year, week, -1).split('\n')]
+
+    # Prediction = namedtupel('Prediction', 'winner loser pyth_delta')
+    predictions = [predict(teams[game.away], teams[game.home]) for game in
+                   predict_week]
+
+    for x in sorted(predictions, key=lambda t: t.pyth_delta, reverse=True):
+        print(x)
+    
+    for x in sorted(predictions, key=lambda t: t.pyth_delta, reverse=True):
+        print('{},{},{}'.format(x.winner.name, x.loser.name, x.pyth_delta))
+
+
+def score_scrape(yr, wk_from, wk_to):
 
     URL = 'https://www.pro-football-reference.com/years/{}/week_{}.htm'
 
@@ -123,33 +147,29 @@ def score_scrape(yr, wk_from, wk_to, file_):
             list(interleave([select_teams(gm), select_scores(gm)])))
 
     def scrape_single(yr, week):
-        return str.lower('\n'.join([game_csv(yr, week, game) for game in select_games(fetch_page_html(yr, week))]))
-            
+        return '\n'.join([str.lower(game_csv(yr, week, game))
+                for game in select_games(fetch_page_html(yr, week))])
+
     def scrape_weeks(yr, wk_from, wk_to):
         step = 1 if wk_from < wk_to else -1
         ex = futures.ThreadPoolExecutor(max_workers=4)
         return '\n'.join(sorted(ex.map(scrape_single, repeat(yr), [wk for wk in range(wk_from, wk_to + step, step)]), reverse=True))
 
-    def scrape(yr, wk_from, wk_to):
-        csv = scrape_single(yr, wk_from) if wk_to == -1 else \
-              scrape_weeks(yr, wk_from, wk_to)
-
-        if file_:
-            with open(file_, 'w') as fh:
-                fh.write(csv)
-        else:
-            print(csv)
-
-
-    scrape(yr, wk_from, wk_to)
+    return \
+        scrape_single(yr, wk_from) if wk_to == -1 else \
+        scrape_weeks(yr, wk_from, wk_to)
 
 
 if __name__ == '__main__':
     doc = docopt(__doc__)
-    # print(doc)
     if doc['get-results']:
-        score_scrape(int(doc['<year>']), int(doc['<start-week>']),
-                     -1 if not doc['<end-week>'] else int(doc['<end-week>']),
-                     doc['--output'])
+        csv = score_scrape(
+            int(doc['<year>']), int(doc['<start-week>']),
+            -1 if not doc['<end-week>'] else int(doc['<end-week>']))
+        if doc['--output']:
+            with open(doc['--output'], 'w') as fh:
+                fh.write(csv)
+        else:
+            print(csv)
     elif doc['make-picks']:
         picker(doc['<records-file>'], int(doc['<year>']), int(doc['<week>']))
