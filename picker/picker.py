@@ -7,6 +7,7 @@
 Usage:
   picker.py get-results <year> <start-week> [<end-week>] [--output CSV]
   picker.py make-picks <records-file> <year> <week> [--output CSV]
+  picker.py spread-scrape [<file>]
 
 
 Options:
@@ -17,6 +18,7 @@ Options:
 """
 
 
+import json
 import operator
 import requests
 import sys
@@ -134,8 +136,8 @@ def picker(file_name, year, week):
     predictions = [guess(teams[game.away], teams[game.home]) for game in
                    predict_week]
 
-    for x in sorted(predictions, key=lambda t: t.pyth.delta, reverse=True):
-        print(x)
+    # for x in sorted(predictions, key=lambda t: t.pyth.delta, reverse=True):
+    #     print(x)
 
     print('away,home,'
           'pyth_w,pyth\u0394,away_pyth,home_pyth,'
@@ -145,6 +147,41 @@ def picker(file_name, year, week):
           'pyth_spread_w,pyth_spread\u0394')
     for x in sorted(predictions, key=lambda t: t.pyth.delta, reverse=True):
         print(format_guess(teams, x))
+
+
+def spread_scrape(file_):
+    URL = 'https://www.oddsshark.com/nfl/odds'
+    team_map = {'ari': 'cardinals', 'atl': 'falcons', 'bal': 'ravens',
+                'buf': 'bills', 'car': 'panthers', 'chi': 'bears',
+                'cin': 'bengals', 'cle': 'browns', 'dal': 'cowboys',
+                'den': 'broncos', 'det': 'lions', 'gb': 'packers',
+                'hou': 'texans', 'ind': 'colts', 'jac': 'jaguars',
+                'kc': 'chiefs', 'lac': 'chargers', 'lar': 'rams',
+                'min': 'vikings', 'ne': 'patriots', 'no': 'saints',
+                'nyg': 'giants', 'nyj': 'jets', 'oak': 'raiders',
+                'phi': 'eagles', 'pit': 'steelers', 'sea': 'seahawks',
+                'sf': 'giants', 'ten': 'titans', 'was': 'redskins'}
+
+    def parse_odds_xml():
+        # games = html.fromstring(requests.get(URL).content) \
+        with open(file_, 'r') as f:
+            page = html.fromstring(f.read())
+        return ([str.lower(json.loads(x.attrib['data-op-name'])['short_name']) for x in page.xpath('//div[starts-with(@class, "op-matchup-team")]')],
+                page.xpath('//div[@id="op-results"]')[0].xpath('div[starts-with(@class, "op-item-row-wrapper")]'))
+
+    teams, games = parse_odds_xml()
+    matchups = [(teams[n], teams[n+1]) for n in range(0, len(teams) - 1, 2)]
+
+    n = 0
+    for g in games:
+        diffs = [json.loads(x.attrib['data-op-info'])['fullgame'] for x in
+                 g.xpath('div/div[starts-with(@class, "op-item op-spread")]')]
+        spreads = [0 if n == 'Ev' else abs(float(n)) for n in diffs if n != '']
+        if len(spreads) == 0:
+            continue
+        fav = 0 if diffs[0].startswith('-') else 1
+        print('{} {}'.format(team_map[matchups[n][fav]], sum(spreads) / len(spreads)))
+        n += 1
 
 
 def score_scrape(yr, wk_from, wk_to):
@@ -205,3 +242,5 @@ if __name__ == '__main__':
             print(csv)
     elif doc['make-picks']:
         picker(doc['<records-file>'], int(doc['<year>']), int(doc['<week>']))
+    elif doc['spread-scrape']:
+        spread_scrape(doc['<file>'])
