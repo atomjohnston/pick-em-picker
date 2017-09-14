@@ -19,7 +19,6 @@ Options:
 """
 
 
-import itertools
 import json
 import operator
 import requests
@@ -28,7 +27,7 @@ import sys
 from collections import namedtuple
 from concurrent import futures
 from docopt import docopt
-from itertools import repeat
+from itertools import repeat, islice
 from lxml import html
 from toolz import interleave
 
@@ -139,12 +138,15 @@ def picker(file_name, year, week, spreads_html):
 def write_predictions(file_, guesses):
 
     def format_pick(idx, pick):
-        return ','.join([pick.won, str(pick.delta), str(idx), '0'])
+        return ','.join([pick.won, str(pick.delta), str(idx)])
 
     def format_guesses(pick_map, guesses, sel_fn):
         i = len(guesses)
         for x in sorted(guesses, key=lambda x: sel_fn(x).delta, reverse=True):
-            pick_map[(x.away.name, x.home.name)].append(format_pick(i, sel_fn(x)))
+            # pick_map[(x.away.name, x.home.name)].append(format_pick(i, sel_fn(x)))
+            pick = sel_fn(x)
+            pick_map[(x.away.name, x.home.name)].append(
+                [pick.won, str(pick.delta), str(i)])
             i -= 1
 
     pick_map = {(g.away.name, g.home.name): [] for g in guesses}
@@ -156,15 +158,17 @@ def write_predictions(file_, guesses):
     format_guesses(pick_map, guesses, lambda x: x.pyth_spread)
 
     print('away,home,'
-          'pyth_w,pyth\u0394,pyth_r,pyth_act,'
-          'spread_w,spread\u0394,spread_r,spread_act,'
-          'points_w,points\u0394,points_r,points_act,'
-          'wins_w,wins\u0394,wins_r,wins_act,'
-          'pyth_spread_w,pyth_spread\u0394,p_spread_r,p_spread_act', file=file_)
+          'pyth,pyth_r,spread,spread_r,points,points_r,wins,wins_r,p_spr,p_spr_r,'
+          'pyth\u0394,spread\u0394,points\u0394,wins\u0394,p_spr\u0394,'
+          'pyth_act,spread_act,points_act,wins_act,p_spr_act', file=file_)
     
     for key, val in pick_map.items():
-        print('{},{}'.format(','.join(key), ','.join(val)), file=file_)
-
+        picks, deltas, ranks = zip(*val)
+        print('{},{},{},0,0,0,0,0'.format(
+            ','.join(key),
+            ','.join(interleave([picks, ranks])),
+            ','.join(deltas)),
+            file=file_)
 
 
 # def spread_scrape(year, week, t_stats, file_):
@@ -206,7 +210,7 @@ def spread_scrape(year, week, file_):
         spreads = [0 if n == 'Ev' else float(n) for n in diffs if n != '']
         if len(spreads) == 0:
             continue
-        avg_spread = sum([n for n in itertools.islice(spreads, 0, None, 2)]) / (len(spreads) / 2)
+        avg_spread = sum([n for n in islice(spreads, 0, None, 2)]) / (len(spreads) / 2)
         scores = (abs(avg_spread), 0) if avg_spread < 0 else \
                  (0, abs(avg_spread))
         game = new_game(year, week, matchups[n][0], scores[0], matchups[n][1], scores[1])
