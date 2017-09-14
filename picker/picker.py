@@ -6,8 +6,8 @@
 
 Usage:
   picker.py get-results <year> <start-week> [<end-week>] [--output CSV]
-  picker.py make-picks <records-file> <year> <week> [--output CSV] [--spread HTML]
-  picker.py spread-scrape <year> <week> [<file>]
+  picker.py make-picks <records-file> <year> <week>
+            [--output CSV] [--spread HTML]
 
 
 Options:
@@ -41,8 +41,8 @@ Guess = namedtuple('Guess', ('away home pyth points '
 
 
 def new_game(year, week, away, ascore, home, hscore):
-    return Game(int(str(year) + '{0:0>2}'.format(week)), int(year), int(week), away,
-                float(ascore), home, float(hscore))
+    return Game(int(str(year) + '{0:0>2}'.format(week)), int(year),
+                int(week), away, float(ascore), home, float(hscore))
 
 
 def team_calculator(games):
@@ -126,12 +126,14 @@ def picker(file_name, year, week, spreads_html):
     teams = team_calculator(played_games)
 
     projected_games = spread_scrape(year, week, spreads_html)
-    projected_teams = team_calculator(list(projected_games.values()) + played_games)
+    projected_teams = team_calculator(
+        list(projected_games.values()) + played_games)
 
-    team_stats = {name: (stats, projected_teams[name]) for name, stats in teams.items()}
+    team_stats = {name: (stats, projected_teams[name])
+                  for name, stats in teams.items()}
 
     guessing_games = score_scrape(year, week, -1).split('\n')
-    return [guess(team_stats, game, projected_games) for game in 
+    return [guess(team_stats, game, projected_games) for game in
             [csv2game(line) for line in guessing_games]]
 
 
@@ -143,7 +145,6 @@ def write_predictions(file_, guesses):
     def format_guesses(pick_map, guesses, sel_fn):
         i = len(guesses)
         for x in sorted(guesses, key=lambda x: sel_fn(x).delta, reverse=True):
-            # pick_map[(x.away.name, x.home.name)].append(format_pick(i, sel_fn(x)))
             pick = sel_fn(x)
             pick_map[(x.away.name, x.home.name)].append(
                 [pick.won, str(pick.delta), str(i)])
@@ -158,10 +159,11 @@ def write_predictions(file_, guesses):
     format_guesses(pick_map, guesses, lambda x: x.pyth_spread)
 
     print('away,home,'
-          'pyth,pyth_r,spread,spread_r,points,points_r,wins,wins_r,p_spr,p_spr_r,'
+          'pyth,pyth_r,spread,spread_r,points,points_r,'
+          'wins,wins_r,p_spr,p_spr_r,'
           'pyth\u0394,spread\u0394,points\u0394,wins\u0394,p_spr\u0394,'
           'pyth_act,spread_act,points_act,wins_act,p_spr_act', file=file_)
-    
+
     for key, val in pick_map.items():
         picks, deltas, ranks = zip(*val)
         print('{},{},{},0,0,0,0,0'.format(
@@ -189,19 +191,24 @@ def spread_scrape(year, week, file_):
     def parse_odds_xml(odds_file):
         if odds_file:
             with open(odds_file, 'r') as f:
-                page = html.fromstring(f.read())
+                p = html.fromstring(f.read())
         else:
-            page = html.fromstring(requests.get(URL).content)
+            p = html.fromstring(requests.get(URL).content)
 
-        return ([str.lower(json.loads(x.attrib['data-op-name'])['short_name']) for x in page.xpath('//div[starts-with(@class, "op-matchup-team")]')],
-                page.xpath('//div[@id="op-results"]')[0].xpath('div[starts-with(@class, "op-item-row-wrapper")]'))
+        teams = [str.lower(json.loads(x.attrib['data-op-name'])['short_name'])
+                 for x in
+                 p.xpath('//div[starts-with(@class, "op-matchup-team")]')]
+        games = p.xpath('//div[@id="op-results"]')[0] \
+                 .xpath('div[starts-with(@class, "op-item-row-wrapper")]')
+        return (teams, games)
 
     def parse_spreads(g):
         return [json.loads(x.attrib['data-op-info'])['fullgame'] for x in
                 g.xpath('div/div[starts-with(@class, "op-item op-spread")]')]
 
     teams, games = parse_odds_xml(file_)
-    matchups = [(team_map[teams[n]], team_map[teams[n+1]]) for n in range(0, len(teams) - 1, 2)]
+    matchups = [(team_map[teams[n]], team_map[teams[n+1]])
+                for n in range(0, len(teams) - 1, 2)]
 
     predictions = {}
     n = 0
@@ -210,10 +217,12 @@ def spread_scrape(year, week, file_):
         spreads = [0 if n == 'Ev' else float(n) for n in diffs if n != '']
         if len(spreads) == 0:
             continue
-        avg_spread = sum([n for n in islice(spreads, 0, None, 2)]) / (len(spreads) / 2)
+        avg_spread = \
+            sum([n for n in islice(spreads, 0, None, 2)]) / (len(spreads) / 2)
         scores = (abs(avg_spread), 0) if avg_spread < 0 else \
                  (0, abs(avg_spread))
-        game = new_game(year, week, matchups[n][0], scores[0], matchups[n][1], scores[1])
+        game = new_game(
+            year, week, matchups[n][0], scores[0], matchups[n][1], scores[1])
         predictions[(game.away, game.home)] = game
         n += 1
 
@@ -272,7 +281,9 @@ def main(write_fh, doc):
             -1 if not doc['<end-week>'] else int(doc['<end-week>']))
         write_fh.write(csv)
     elif doc['make-picks']:
-        predictions = picker(doc['<records-file>'], int(doc['<year>']), int(doc['<week>']), doc['--spread'])
+        predictions = picker(
+            doc['<records-file>'], int(doc['<year>']),
+            int(doc['<week>']), doc['--spread'])
         write_predictions(write_fh, predictions)
     elif doc['spread-scrape']:
         spread_scrape(doc['<year>'], doc['<week>'], doc['<file>'])
