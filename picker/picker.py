@@ -37,7 +37,6 @@ Game = namedtuple('Game', 'sort_key year week away away_pts home home_pts')
 Team = namedtuple('Team', 'name win_p pyth point_diff_avg point_avg record')
 Record = namedtuple('Record', 'name points record')
 Pick = namedtuple('Pick', 'won lost delta')
-# Spread = namedtuple('Spread', 'won points')
 Guess = namedtuple('Guess', ('away home pyth points '
                              'wins spread pyth_spread'))
 
@@ -54,8 +53,6 @@ def team_calculator(games):
 
     def add_records(r1, r2):
         if sum(r1.record) == GAME_COUNT:
-            # print('game count reached')
-            # print(r1)
             return r1
         else:
             return Record(
@@ -71,7 +68,6 @@ def team_calculator(games):
                Record(name=name, points=(0, 0), record=(0, 0))
 
     def eval_game(game, a_rec, h_rec):
-        # print('{} {} at {}'.format(game.sort_key, game.away, game.home))
         winner, loser = (a_rec, h_rec) if game.away_pts > game.home_pts else \
                         (h_rec, a_rec)
         score = (game.away_pts, game.home_pts)
@@ -115,10 +111,10 @@ def picker(file_name, year, week, spreads_html):
         else:
             return Pick(home.name, away.name, h_val - a_val)
 
-
-    def guess(a_stats, h_stats, p_game):
-        away, home = (a_stats[0], h_stats[0])
-        p_away, p_home = (a_stats[1], h_stats[1])
+    def guess(stats, game, projected_winners):
+        away, home = (stats[game.away][0], stats[game.home][0])
+        p_away, p_home = (stats[game.away][1], stats[game.home][1])
+        p_game = projected_winners[(game.away, game.home)]
         return Guess(
             away=away, home=home,
             pyth=pick(away, away.pyth, home, home.pyth),
@@ -127,39 +123,52 @@ def picker(file_name, year, week, spreads_html):
             spread=pick(p_away, p_game.away_pts, p_home, p_game.home_pts),
             pyth_spread=pick(p_away, p_away.pyth, p_home, p_home.pyth))
 
-    def format_guess(teams, guess):
-        return ','.join([str(m) for m in
-                        [x.away.name, x.home.name] +
-                        format_pick(teams, guess.pyth, 'pyth') +
-                        format_pick(teams, guess.points, 'point_diff_avg') +
-                        format_pick(teams, guess.wins, 'win_p') +
-                        [guess.spread.won, guess.spread.delta] +
-                        [guess.pyth_spread.won, guess.pyth_spread.delta]])
-
-    def format_pick(teams, pick, attr):
-        return [pick.won, pick.delta,
-                getattr(teams[pick.won], attr),
-                getattr(teams[pick.lost], attr)]
-
     played_games = get_games(file_name)
     teams = team_calculator(played_games)
-    projected_games = spread_scrape(year, week, teams, spreads_html)
+
+    projected_games = spread_scrape(year, week, spreads_html)
     projected_teams = team_calculator(list(projected_games.values()) + played_games)
+
     team_stats = {name: (stats, projected_teams[name]) for name, stats in teams.items()}
-    predictions = [guess(team_stats[game.away], team_stats[game.home], projected_games[(game.away, game.home)]) for game in [csv2game(line) for line in score_scrape(year, week, -1).split('\n')]]
+
+    guessing_games = score_scrape(year, week, -1).split('\n')
+    return [guess(team_stats, game, projected_games) for game in 
+            [csv2game(line) for line in guessing_games]]
+
+
+def write_predictions(file_, guesses):
+
+    def format_pick(idx, pick):
+        return ','.join([pick.won, str(pick.delta), str(idx), '0'])
+
+    def format_guesses(pick_map, guesses, sel_fn):
+        i = len(guesses)
+        for x in sorted(guesses, key=lambda x: sel_fn(x).delta, reverse=True):
+            pick_map[(x.away.name, x.home.name)].append(format_pick(i, sel_fn(x)))
+            i -= 1
+
+    pick_map = {(g.away.name, g.home.name): [] for g in guesses}
+
+    format_guesses(pick_map, guesses, lambda x: x.pyth)
+    format_guesses(pick_map, guesses, lambda x: x.spread)
+    format_guesses(pick_map, guesses, lambda x: x.points)
+    format_guesses(pick_map, guesses, lambda x: x.wins)
+    format_guesses(pick_map, guesses, lambda x: x.pyth_spread)
 
     print('away,home,'
-          'pyth_w,pyth\u0394,away_pyth,home_pyth,'
-          'points_w,points\u0394,away_pts,home_pts,'
-          'wins_w,wins\u0394,away_pct,home_pct,'
-          'spread_w,spread,'
-          'pyth_spread_w,pyth_spread\u0394')
+          'pyth_w,pyth\u0394,pyth_r,pyth_act,'
+          'spread_w,spread\u0394,spread_r,spread_act,'
+          'points_w,points\u0394,points_r,points_act,'
+          'wins_w,wins\u0394,wins_r,wins_act,'
+          'pyth_spread_w,pyth_spread\u0394,p_spread_r,p_spread_act', file=file_)
+    
+    for key, val in pick_map.items():
+        print('{},{}'.format(','.join(key), ','.join(val)), file=file_)
 
-    for x in sorted(predictions, key=lambda t: t.pyth.delta, reverse=True):
-        print(format_guess(teams, x))
 
 
-def spread_scrape(year, week, t_stats, file_):
+# def spread_scrape(year, week, t_stats, file_):
+def spread_scrape(year, week, file_):
     URL = 'https://www.oddsshark.com/nfl/odds'
     team_map = {'ari': 'cardinals', 'atl': 'falcons', 'bal': 'ravens',
                 'buf': 'bills', 'car': 'panthers', 'chi': 'bears',
@@ -170,12 +179,16 @@ def spread_scrape(year, week, t_stats, file_):
                 'min': 'vikings', 'ne': 'patriots', 'no': 'saints',
                 'nyg': 'giants', 'nyj': 'jets', 'oak': 'raiders',
                 'phi': 'eagles', 'pit': 'steelers', 'sea': 'seahawks',
-                'sf': '49ers', 'ten': 'titans', 'was': 'redskins'}
+                'sf': '49ers', 'ten': 'titans', 'was': 'redskins',
+                'mia': 'dolphins', 'tb': 'buccaneers'}
 
-    def parse_odds_xml():
-        # games = html.fromstring(requests.get(URL).content) \
-        with open(file_, 'r') as f:
-            page = html.fromstring(f.read())
+    def parse_odds_xml(odds_file):
+        if odds_file:
+            with open(odds_file, 'r') as f:
+                page = html.fromstring(f.read())
+        else:
+            page = html.fromstring(requests.get(URL).content)
+
         return ([str.lower(json.loads(x.attrib['data-op-name'])['short_name']) for x in page.xpath('//div[starts-with(@class, "op-matchup-team")]')],
                 page.xpath('//div[@id="op-results"]')[0].xpath('div[starts-with(@class, "op-item-row-wrapper")]'))
 
@@ -183,9 +196,8 @@ def spread_scrape(year, week, t_stats, file_):
         return [json.loads(x.attrib['data-op-info'])['fullgame'] for x in
                 g.xpath('div/div[starts-with(@class, "op-item op-spread")]')]
 
-    teams, games = parse_odds_xml()
+    teams, games = parse_odds_xml(file_)
     matchups = [(team_map[teams[n]], team_map[teams[n+1]]) for n in range(0, len(teams) - 1, 2)]
-    # print(matchups)
 
     predictions = {}
     n = 0
@@ -197,14 +209,10 @@ def spread_scrape(year, week, t_stats, file_):
         avg_spread = sum([n for n in itertools.islice(spreads, 0, None, 2)]) / (len(spreads) / 2)
         scores = (abs(avg_spread), 0) if avg_spread < 0 else \
                  (0, abs(avg_spread))
-        x = min(t_stats[matchups[n][0]].point_avg, t_stats[matchups[n][1]].point_avg)
-        game = new_game(year, week, matchups[n][0], scores[0] + x, matchups[n][1], scores[1] + x)
-        # print(game)
+        game = new_game(year, week, matchups[n][0], scores[0], matchups[n][1], scores[1])
         predictions[(game.away, game.home)] = game
-            
-
-        # print(predictions[n])
         n += 1
+
     return predictions
 
 
@@ -253,18 +261,23 @@ def score_scrape(yr, wk_from, wk_to):
         scrape_weeks(yr, wk_from, wk_to)
 
 
-if __name__ == '__main__':
-    doc = docopt(__doc__)
+def main(write_fh, doc):
     if doc['get-results']:
         csv = score_scrape(
             int(doc['<year>']), int(doc['<start-week>']),
             -1 if not doc['<end-week>'] else int(doc['<end-week>']))
-        if doc['--output']:
-            with open(doc['--output'], 'w') as fh:
-                fh.write(csv)
-        else:
-            print(csv)
+        write_fh.write(csv)
     elif doc['make-picks']:
-        picker(doc['<records-file>'], int(doc['<year>']), int(doc['<week>']), doc['--spread'])
+        predictions = picker(doc['<records-file>'], int(doc['<year>']), int(doc['<week>']), doc['--spread'])
+        write_predictions(write_fh, predictions)
     elif doc['spread-scrape']:
         spread_scrape(doc['<year>'], doc['<week>'], doc['<file>'])
+
+
+if __name__ == '__main__':
+    doc = docopt(__doc__)
+    write_fh = open(doc['--output'], 'w') if doc['--output'] else sys.stdout
+    try:
+        main(write_fh, doc)
+    finally:
+        write_fh.close()
