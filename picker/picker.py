@@ -30,15 +30,18 @@ from docopt import docopt
 from itertools import repeat, islice
 from lxml import html  # type: ignore
 from toolz import interleave
-from typing import NamedTuple, Tuple, TextIO, Any, List, Dict
+from typing import NamedTuple, Tuple, TextIO, Any, List, Dict, Callable
 
+
+PickMap = Dict[Tuple[str, str], List[List[str]]]
+IntPair = Tuple[Any, ...]
 
 Game = NamedTuple('Game', [('sort_key', int), ('year', int), ('week', int),
                            ('away', str), ('away_pts', float),
                            ('home', str), ('home_pts', float)])
 
-Record = NamedTuple('Record', [('name', str), ('points', Tuple[int, int]),
-                               ('record', Tuple[int, int])])
+Record = NamedTuple('Record', [('name', str), ('points', IntPair),
+                               ('record', IntPair)])
 
 Team = NamedTuple('Team', [('name', str), ('win_p', float), ('pyth', float),
                            ('point_diff_avg', float), ('point_avg', float),
@@ -63,7 +66,7 @@ def team_calculator(games: List[Game]) -> Dict[str, Team]:
     GAME_COUNT = 16
     EXP = 2.37
 
-    def add_records(r1, r2):
+    def add_records(r1: Record, r2: Record) -> Record:
         if sum(r1.record) == GAME_COUNT:
             return r1
         else:
@@ -72,14 +75,15 @@ def team_calculator(games: List[Game]) -> Dict[str, Team]:
                 points=sum_tuples(r1.points, r2.points),
                 record=sum_tuples(r1.record, r2.record))
 
-    def sum_tuples(t1, t2):
+    def sum_tuples(t1: IntPair, t2: IntPair) -> IntPair:
         return tuple(map(operator.add, t1, t2))
 
-    def get_record(name, records):
+    def get_record(name: str, records: Dict[str, Record]) -> Record:
         return records[name] if name in records else \
                Record(name=name, points=(0, 0), record=(0, 0))
 
-    def eval_game(game, a_rec, h_rec):
+    def eval_game(game: Game, a_rec: Record,
+                  h_rec: Record) -> Tuple[Record, Record]:
         winner, loser = (a_rec, h_rec) if game.away_pts > game.home_pts else \
                         (h_rec, a_rec)
         score = (game.away_pts, game.home_pts)
@@ -142,7 +146,7 @@ def picker(file_name: str, spreads_html: str,
     played_games = get_games(file_name)
     teams = team_calculator(played_games)
 
-    projected_games = spread_scrape(year, week, spreads_html)
+    projected_games = spread_scrape(str(year), str(week), spreads_html)
     projected_teams = team_calculator(
         list(projected_games.values()) + played_games)
 
@@ -154,9 +158,10 @@ def picker(file_name: str, spreads_html: str,
             [csv2game(line) for line in guessing_games]]
 
 
-def rank_predictions(guesses):
+def rank_predictions(guesses: List[Guess]) -> PickMap:
 
-    def rank(pick_map, guesses, sel_fn):
+    def rank(pick_map: PickMap, guesses: List[Guess],
+             sel_fn: Callable[[Guess], Pick]) -> None:
         i = len(guesses)
         for x in sorted(guesses, key=lambda x: sel_fn(x).delta, reverse=True):
             pick = sel_fn(x)
@@ -164,18 +169,18 @@ def rank_predictions(guesses):
                 [pick.won, str(pick.delta), str(i)])
             i -= 1
 
-    pick_map = {(g.away.name, g.home.name): [] for g in guesses}
+    picks = {(g.away.name, g.home.name): [] for g in guesses}  # type: PickMap
 
-    rank(pick_map, guesses, lambda x: x.pyth)
-    rank(pick_map, guesses, lambda x: x.spread)
-    rank(pick_map, guesses, lambda x: x.wins)
-    rank(pick_map, guesses, lambda x: x.points)
-    rank(pick_map, guesses, lambda x: x.pyth_spread)
+    rank(picks, guesses, lambda x: x.pyth)
+    rank(picks, guesses, lambda x: x.spread)
+    rank(picks, guesses, lambda x: x.wins)
+    rank(picks, guesses, lambda x: x.points)
+    rank(picks, guesses, lambda x: x.pyth_spread)
 
-    return pick_map
+    return picks
 
 
-def write_predictions(file_, pick_map):
+def write_predictions(file_: TextIO, pick_map: PickMap) -> None:
 
     print('away,home,'
           'pyth,pyth_r,spread,spread_r,wins,wins_r,'
@@ -192,7 +197,7 @@ def write_predictions(file_, pick_map):
             file=file_)
 
 
-def spread_scrape(year, week, file_):
+def spread_scrape(yr: str, wk: str, odds: str) -> Dict[Tuple[str, str], Game]:
     URL = 'https://www.oddsshark.com/nfl/odds'
     team_map = {'ari': 'cardinals', 'atl': 'falcons', 'bal': 'ravens',
                 'buf': 'bills', 'car': 'panthers', 'chi': 'bears',
@@ -206,7 +211,7 @@ def spread_scrape(year, week, file_):
                 'sf': '49ers', 'ten': 'titans', 'was': 'redskins',
                 'mia': 'dolphins', 'tb': 'buccaneers'}
 
-    def parse_odds_xml(odds_file):
+    def parse_odds_xml(odds_file: str) -> Tuple[List[str], List[Any]]:
         if odds_file:
             with open(odds_file, 'r') as f:
                 p = html.fromstring(f.read())
@@ -220,15 +225,15 @@ def spread_scrape(year, week, file_):
                  .xpath('div[starts-with(@class, "op-item-row-wrapper")]')
         return (teams, games)
 
-    def parse_spreads(g):
+    def parse_spreads(g: Any) -> List[str]:
         return [json.loads(x.attrib['data-op-info'])['fullgame'] for x in
                 g.xpath('div/div[starts-with(@class, "op-item op-spread")]')]
 
-    teams, games = parse_odds_xml(file_)
+    teams, games = parse_odds_xml(odds)
     matchups = [(team_map[teams[n]], team_map[teams[n+1]])
                 for n in range(0, len(teams) - 1, 2)]
 
-    predictions = {}
+    predictions = {}  # type: Dict[Tuple[str, str], Game]
     n = 0
     for g in games:
         diffs = parse_spreads(g)
@@ -239,48 +244,49 @@ def spread_scrape(year, week, file_):
             sum([n for n in islice(spreads, 0, None, 2)]) / (len(spreads) / 2)
         scores = (abs(avg_spread), 0) if avg_spread < 0 else \
                  (0, abs(avg_spread))
-        game = new_game(
-            year, week, matchups[n][0], scores[0], matchups[n][1], scores[1])
+        game = new_game(yr, wk,
+                        matchups[n][0], str(scores[0]),
+                        matchups[n][1], str(scores[1]))
         predictions[(game.away, game.home)] = game
         n += 1
 
     return predictions
 
 
-def score_scrape(yr, wk_from, wk_to):
+def score_scrape(yr: int, wk_from: int, wk_to: int) -> str:
 
     URL = 'https://www.pro-football-reference.com/years/{}/week_{}.htm'
 
-    def select_games(xml):
+    def select_games(xml: Any) -> Any:
         return xml.xpath('//div[starts-with(@class,"game_summary")]'
                          '/table[@class="teams"]'
                          '/tbody')
 
-    def select_teams(game_xml):
+    def select_teams(game_xml: Any) -> List[str]:
         return [x.text.split()[-1]
                 for x in
                 game_xml.xpath('tr/td/a[starts-with(@href, "/teams/")]')]
 
-    def select_scores(game_xml):
+    def select_scores(game_xml: Any) -> List[str]:
         score = [x.text for x in game_xml.xpath('tr/td[@class="right"]')][0:2]
         if not score[0] or not score[1]:
             return ['-1', '-1']
         else:
             return score
 
-    def fetch_page_html(yr, wk):
+    def fetch_page_html(yr: int, wk: int) -> Any:
         return html.fromstring(requests.get(URL.format(yr, wk)).content)
 
-    def game_csv(yr, wk, gm):
+    def game_csv(yr: int, wk: int, gm: str) -> str:
         return ','.join(
             [str(yr), '{0:0>2}'.format(wk)] +
             list(interleave([select_teams(gm), select_scores(gm)])))
 
-    def scrape_single(yr, week):
+    def scrape_single(yr: int, week: int) -> str:
         return '\n'.join([str.lower(game_csv(yr, week, game))
                          for game in select_games(fetch_page_html(yr, week))])
 
-    def scrape_weeks(yr, wk_from, wk_to):
+    def scrape_weeks(yr: int, wk_from: int, wk_to: int) -> str:
         step = 1 if wk_from < wk_to else -1
         ex = futures.ThreadPoolExecutor(max_workers=4)
         return '\n'.join(sorted(ex.map(
