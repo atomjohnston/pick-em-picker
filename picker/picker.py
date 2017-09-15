@@ -137,12 +137,9 @@ def picker(file_name, year, week, spreads_html):
             [csv2game(line) for line in guessing_games]]
 
 
-def write_predictions(file_, guesses):
+def rank_predictions(guesses):
 
-    def format_pick(idx, pick):
-        return ','.join([pick.won, str(pick.delta), str(idx)])
-
-    def format_guesses(pick_map, guesses, sel_fn):
+    def rank(pick_map, guesses, sel_fn):
         i = len(guesses)
         for x in sorted(guesses, key=lambda x: sel_fn(x).delta, reverse=True):
             pick = sel_fn(x)
@@ -152,17 +149,22 @@ def write_predictions(file_, guesses):
 
     pick_map = {(g.away.name, g.home.name): [] for g in guesses}
 
-    format_guesses(pick_map, guesses, lambda x: x.pyth)
-    format_guesses(pick_map, guesses, lambda x: x.spread)
-    format_guesses(pick_map, guesses, lambda x: x.points)
-    format_guesses(pick_map, guesses, lambda x: x.wins)
-    format_guesses(pick_map, guesses, lambda x: x.pyth_spread)
+    rank(pick_map, guesses, lambda x: x.pyth)
+    rank(pick_map, guesses, lambda x: x.spread)
+    rank(pick_map, guesses, lambda x: x.wins)
+    rank(pick_map, guesses, lambda x: x.points)
+    rank(pick_map, guesses, lambda x: x.pyth_spread)
+
+    return pick_map
+
+
+def write_predictions(file_, pick_map):
 
     print('away,home,'
-          'pyth,pyth_r,spread,spread_r,points,points_r,'
-          'wins,wins_r,p_spr,p_spr_r,'
-          'pyth\u0394,spread\u0394,points\u0394,wins\u0394,p_spr\u0394,'
-          'pyth_act,spread_act,points_act,wins_act,p_spr_act', file=file_)
+          'pyth,pyth_r,spread,spread_r,wins,wins_r,'
+          'points,points_r,p_spr,p_spr_r,'
+          'pyth\u0394,spread\u0394,wins\u0394,points\u0394,p_spr\u0394,'
+          'pyth_act,spread_act,wins_act,points_act,p_spr_act', file=file_)
 
     for key, val in pick_map.items():
         picks, deltas, ranks = zip(*val)
@@ -173,7 +175,6 @@ def write_predictions(file_, guesses):
             file=file_)
 
 
-# def spread_scrape(year, week, t_stats, file_):
 def spread_scrape(year, week, file_):
     URL = 'https://www.oddsshark.com/nfl/odds'
     team_map = {'ari': 'cardinals', 'atl': 'falcons', 'bal': 'ravens',
@@ -284,7 +285,8 @@ def main(write_fh, doc):
         predictions = picker(
             doc['<records-file>'], int(doc['<year>']),
             int(doc['<week>']), doc['--spread'])
-        write_predictions(write_fh, predictions)
+        ranks = rank_predictions(predictions)
+        write_predictions(write_fh, ranks)
     elif doc['spread-scrape']:
         spread_scrape(doc['<year>'], doc['<week>'], doc['<file>'])
 
