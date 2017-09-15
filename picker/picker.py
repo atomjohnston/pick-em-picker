@@ -28,24 +28,37 @@ from collections import namedtuple
 from concurrent import futures
 from docopt import docopt
 from itertools import repeat, islice
-from lxml import html
+from lxml import html  # type: ignore
 from toolz import interleave
+from typing import NamedTuple, Tuple, TextIO, Any, List, Dict
 
 
-Game = namedtuple('Game', 'sort_key year week away away_pts home home_pts')
-Team = namedtuple('Team', 'name win_p pyth point_diff_avg point_avg record')
-Record = namedtuple('Record', 'name points record')
-Pick = namedtuple('Pick', 'won lost delta')
-Guess = namedtuple('Guess', ('away home pyth points '
-                             'wins spread pyth_spread'))
+Game = NamedTuple('Game', [('sort_key', int), ('year', int), ('week', int),
+                           ('away', str), ('away_pts', float),
+                           ('home', str), ('home_pts', float)])
+
+Record = NamedTuple('Record', [('name', str), ('points', Tuple[int, int]),
+                               ('record', Tuple[int, int])])
+
+Team = NamedTuple('Team', [('name', str), ('win_p', float), ('pyth', float),
+                           ('point_diff_avg', float), ('point_avg', float),
+                           ('record', Record)])
+
+Pick = NamedTuple('Pick', [('won', str), ('lost', str), ('delta', float)])
+
+Guess = NamedTuple('Guess', [('away', Team), ('home', Team), ('pyth', Pick),
+                             ('points', Pick), ('wins', Pick),
+                             ('spread', Pick), ('pyth_spread', Pick)])
 
 
-def new_game(year, week, away, ascore, home, hscore):
+def new_game(year: str, week: str,
+             away: str, ascore: str,
+             home: str, hscore: str) -> Game:
     return Game(int(str(year) + '{0:0>2}'.format(week)), int(year),
                 int(week), away, float(ascore), home, float(hscore))
 
 
-def team_calculator(games):
+def team_calculator(games: List[Game]) -> Dict[str, Team]:
 
     GAME_COUNT = 16
     EXP = 2.37
@@ -81,7 +94,8 @@ def team_calculator(games):
                     rec.points[0]**EXP/(rec.points[0]**EXP+rec.points[1]**EXP),
                     operator.sub(*rec.points)/GAME_COUNT,
                     rec.points[0]/GAME_COUNT, rec)
-    records = {}
+
+    records = {}  # type: Dict[str, Record]
 
     for game in games:
         records[game.away] = get_record(game.away, records)
@@ -94,23 +108,26 @@ def team_calculator(games):
     return {team: calc_team(team, record) for team, record in records.items()}
 
 
-def picker(file_name, year, week, spreads_html):
+def picker(file_name: str, spreads_html: str,
+           year: int, week: int) -> List[Guess]:
 
-    def csv2game(line):
+    def csv2game(line: str) -> Game:
         return new_game(*line.strip().split(','))
 
-    def get_games(file_name):
+    def get_games(file_name: str) -> List[Game]:
         with open(file_name, 'r') as fh:
             return sorted([csv2game(line) for line in fh.readlines()],
                           key=lambda g: g.sort_key, reverse=True)
 
-    def pick(away, a_val, home, h_val):
+    def pick(away: Team, a_val: float, home: Team, h_val: float) -> Pick:
         if a_val > h_val:
             return Pick(away.name, home.name, a_val - h_val)
         else:
             return Pick(home.name, away.name, h_val - a_val)
 
-    def guess(stats, game, projected_winners):
+    def guess(stats: Dict[str, Tuple[Team, Team]],
+              game: Game,
+              projected_winners: Dict[Tuple[str, str], Game]) -> Guess:
         away, home = (stats[game.away][0], stats[game.home][0])
         p_away, p_home = (stats[game.away][1], stats[game.home][1])
         p_game = projected_winners[(game.away, game.home)]
@@ -275,7 +292,7 @@ def score_scrape(yr, wk_from, wk_to):
         scrape_weeks(yr, wk_from, wk_to)
 
 
-def main(write_fh, doc):
+def main(write_fh: TextIO, doc: Any) -> None:
     if doc['get-results']:
         csv = score_scrape(
             int(doc['<year>']), int(doc['<start-week>']),
@@ -283,8 +300,8 @@ def main(write_fh, doc):
         write_fh.write(csv)
     elif doc['make-picks']:
         predictions = picker(
-            doc['<records-file>'], int(doc['<year>']),
-            int(doc['<week>']), doc['--spread'])
+            doc['<records-file>'], doc['--spread'],
+            int(doc['<year>']), int(doc['<week>']))
         ranks = rank_predictions(predictions)
         write_predictions(write_fh, ranks)
     elif doc['spread-scrape']:
