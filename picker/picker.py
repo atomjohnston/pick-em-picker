@@ -33,7 +33,6 @@ from toolz import interleave, frequencies, concat
 from typing import NamedTuple, Tuple, TextIO, Any, List, Dict, Callable
 
 
-PickMap = Dict[Tuple[str, str], List[List[Any]]]
 IntPair = Tuple[Any, ...]
 
 Game = NamedTuple('Game', [('sort_key', int), ('year', int), ('week', int),
@@ -49,9 +48,15 @@ Team = NamedTuple('Team', [('name', str), ('win_p', float), ('pyth', float),
 
 Pick = NamedTuple('Pick', [('won', str), ('lost', str), ('delta', float)])
 
+Ranked = NamedTuple('Ranked', [('victor', str), ('rank', int), ('delta', float)])
+
 Guess = NamedTuple('Guess', [('away', Team), ('home', Team), ('pyth', Pick),
                              ('points', Pick), ('wins', Pick),
                              ('spread', Pick), ('pyth_spread', Pick)])
+
+Matchup = Tuple[str, str]
+
+PickMap = Dict[Matchup, List[Ranked]]
 
 
 def new_game(year: str, week: str,
@@ -158,7 +163,7 @@ def picker(file_name: str, spreads_html: str,
             [csv2game(line) for line in guessing_games]]
 
 
-def rank_predictions(guesses: List[Guess]) -> Tuple(PickMap):
+def rank_predictions(guesses: List[Guess]) -> Tuple[PickMap, PickMap]:
 
     def rank(pick_map: PickMap, guesses: List[Guess],
              sel_fn: Callable[[Guess], Pick]) -> None:
@@ -166,7 +171,7 @@ def rank_predictions(guesses: List[Guess]) -> Tuple(PickMap):
         for x in sorted(guesses, key=lambda x: sel_fn(x).delta, reverse=True):
             pick = sel_fn(x)
             pick_map[(x.away.name, x.home.name)].append(
-                [pick.won, str(pick.delta), str(i)])
+                Ranked(pick.won, pick.delta, i))
             i -= 1
 
     def average_rank(matchup, values):
@@ -180,7 +185,7 @@ def rank_predictions(guesses: List[Guess]) -> Tuple(PickMap):
                         (home, away) 
         winner_avg = (avg[winner] - avg[loser]) / len(victors)
         avg_winner = winner if winner_avg >=0 else loser
-        return [avg_winner, abs(winner_avg)]
+        return (matchup, avg_winner, abs(winner_avg))
 
     picks = defaultdict(list)
 
@@ -193,27 +198,30 @@ def rank_predictions(guesses: List[Guess]) -> Tuple(PickMap):
     rank(picks, guesses, lambda x: x.points)
     rank(picks, guesses, lambda x: x.pyth_spread)
 
-    return (picks, [x for x in sorted(average_winners, key=lambda k: k[1])])
+    return (picks, {x[0]: Ranked(x[1], x[2], n+1) for n, x in enumerate(sorted(average_winners, key=lambda k: k[-1]))})
 
 
 def write_predictions(file_: TextIO,
                       pick_map: PickMap,
-                      averages: List[Tuple[str, int]]) -> None:
+                      averages: PickMap) -> None:
+
+    def strings(list_):
+        return [str(x) for x in list_]
 
     print('away,home,'
-          'pyth,pyth_r,spread,spread_r,wins,wins_r,'
-          'avg,avg_r,',
+          'avg,avg_r,pyth,pyth_r,spread,spread_r,wins,wins_r,'
           'points,points_r,p_spr,p_spr_r,'
-          'pyth\u0394,spread\u0394,wins\u0394,avg\u0394,points\u0394,p_spr\u0394,'
+          'avg\u0394,pyth\u0394,spread\u0394,wins\u0394,points\u0394,p_spr\u0394,'
           'pyth_act,spread_act,wins_act,points_act,p_spr_act', file=file_)
 
 
     for key, val in pick_map.items():
         picks, deltas, ranks = zip(*val)
-        print('{},{},{},{},0,0,0,0,0'.format(
+        a_pix, a_delts, a_ranx = averages[key]
+        print('{},{},{},0,0,0,0,0'.format(
             ','.join(key),
-            ','.join(interleave([picks, ranks])),
-            ','.join(deltas)),
+            ','.join(interleave([strings((a_pix,) + picks), strings((a_ranx,) + ranks)])),
+            ','.join(strings((a_delts,) + deltas))),
             file=file_)
 
 
