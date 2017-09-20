@@ -24,16 +24,16 @@ import operator
 import requests
 import sys
 
-from collections import namedtuple
+from collections import namedtuple, defaultdict
 from concurrent import futures
 from docopt import docopt
 from itertools import repeat, islice
 from lxml import html  # type: ignore
-from toolz import interleave
+from toolz import interleave, frequencies, concat
 from typing import NamedTuple, Tuple, TextIO, Any, List, Dict, Callable
 
 
-PickMap = Dict[Tuple[str, str], List[List[str]]]
+PickMap = Dict[Tuple[str, str], List[List[Any]]]
 IntPair = Tuple[Any, ...]
 
 Game = NamedTuple('Game', [('sort_key', int), ('year', int), ('week', int),
@@ -158,7 +158,7 @@ def picker(file_name: str, spreads_html: str,
             [csv2game(line) for line in guessing_games]]
 
 
-def rank_predictions(guesses: List[Guess]) -> PickMap:
+def rank_predictions(guesses: List[Guess]) -> Tuple(PickMap):
 
     def rank(pick_map: PickMap, guesses: List[Guess],
              sel_fn: Callable[[Guess], Pick]) -> None:
@@ -169,28 +169,48 @@ def rank_predictions(guesses: List[Guess]) -> PickMap:
                 [pick.won, str(pick.delta), str(i)])
             i -= 1
 
-    picks = {(g.away.name, g.home.name): [] for g in guesses}  # type: PickMap
+    def average_rank(matchup, values):
+        victors, deltas, ranks = zip(*values)
+        away, home = matchup
+        avg = defaultdict(lambda: 0)
+        for n, victor in enumerate(victors):
+            avg[victor] = avg[victor] + int(ranks[n])
+        consensus = frequencies(victors)
+        winner, loser = (away, home) if away in consensus and consensus[away] >= 2 else \
+                        (home, away) 
+        winner_avg = (avg[winner] - avg[loser]) / len(victors)
+        avg_winner = winner if winner_avg >=0 else loser
+        return [avg_winner, abs(winner_avg)]
+
+    picks = defaultdict(list)
 
     rank(picks, guesses, lambda x: x.pyth)
     rank(picks, guesses, lambda x: x.spread)
     rank(picks, guesses, lambda x: x.wins)
+
+    average_winners = [average_rank(k, v) for k, v in picks.items()]
+
     rank(picks, guesses, lambda x: x.points)
     rank(picks, guesses, lambda x: x.pyth_spread)
 
-    return picks
+    return (picks, [x for x in sorted(average_winners, key=lambda k: k[1])])
 
 
-def write_predictions(file_: TextIO, pick_map: PickMap) -> None:
+def write_predictions(file_: TextIO,
+                      pick_map: PickMap,
+                      averages: List[Tuple[str, int]]) -> None:
 
     print('away,home,'
           'pyth,pyth_r,spread,spread_r,wins,wins_r,'
+          'avg,avg_r,',
           'points,points_r,p_spr,p_spr_r,'
-          'pyth\u0394,spread\u0394,wins\u0394,points\u0394,p_spr\u0394,'
+          'pyth\u0394,spread\u0394,wins\u0394,avg\u0394,points\u0394,p_spr\u0394,'
           'pyth_act,spread_act,wins_act,points_act,p_spr_act', file=file_)
+
 
     for key, val in pick_map.items():
         picks, deltas, ranks = zip(*val)
-        print('{},{},{},0,0,0,0,0'.format(
+        print('{},{},{},{},0,0,0,0,0'.format(
             ','.join(key),
             ','.join(interleave([picks, ranks])),
             ','.join(deltas)),
@@ -308,8 +328,8 @@ def main(write_fh: TextIO, doc: Any) -> None:
         predictions = picker(
             doc['<records-file>'], doc['--spread'],
             int(doc['<year>']), int(doc['<week>']))
-        ranks = rank_predictions(predictions)
-        write_predictions(write_fh, ranks)
+        ranks, averages = rank_predictions(predictions)
+        write_predictions(write_fh, ranks, averages)
     elif doc['spread-scrape']:
         spread_scrape(doc['<year>'], doc['<week>'], doc['<file>'])
 
