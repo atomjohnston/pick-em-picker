@@ -30,7 +30,8 @@ from docopt import docopt
 from itertools import repeat, islice
 from lxml import html  # type: ignore
 from toolz import interleave, frequencies, concat
-from typing import NamedTuple, Tuple, TextIO, Any, List, Dict, Callable
+from typing import (NamedTuple, Tuple, TextIO, Any, List, Dict, Callable,
+                    Sequence, Union)
 
 
 IntPair = Tuple[Any, ...]
@@ -48,7 +49,8 @@ Team = NamedTuple('Team', [('name', str), ('win_p', float), ('pyth', float),
 
 Pick = NamedTuple('Pick', [('won', str), ('lost', str), ('delta', float)])
 
-Ranked = NamedTuple('Ranked', [('victor', str), ('rank', int), ('delta', float)])
+Ranked = NamedTuple('Ranked', [('victor', str), ('delta', float),
+                               ('rank', int)])
 
 Guess = NamedTuple('Guess', [('away', Team), ('home', Team), ('pyth', Pick),
                              ('points', Pick), ('wins', Pick),
@@ -136,7 +138,7 @@ def picker(file_name: str, spreads_html: str,
 
     def guess(stats: Dict[str, Tuple[Team, Team]],
               game: Game,
-              projected_winners: Dict[Tuple[str, str], Game]) -> Guess:
+              projected_winners: Dict[Matchup, Game]) -> Guess:
         away, home = (stats[game.away][0], stats[game.home][0])
         p_away, p_home = (stats[game.away][1], stats[game.home][1])
         p_game = projected_winners[(game.away, game.home)]
@@ -174,20 +176,23 @@ def rank_predictions(guesses: List[Guess]) -> Tuple[PickMap, PickMap]:
                 Ranked(pick.won, pick.delta, i))
             i -= 1
 
-    def average_rank(matchup, values):
+    def average_rank(matchup: Matchup,
+                     values: List[Ranked]) -> Tuple[Matchup, str, float]:
         victors, deltas, ranks = zip(*values)
         away, home = matchup
-        avg = defaultdict(lambda: 0)
+        avg = defaultdict(lambda: 0)  # type: Dict[str, float]
         for n, victor in enumerate(victors):
             avg[victor] = avg[victor] + int(ranks[n])
         consensus = frequencies(victors)
-        winner, loser = (away, home) if away in consensus and consensus[away] >= 2 else \
-                        (home, away) 
+        if away in consensus and consensus[away] >= 2:
+            winner, loser = (away, home)
+        else:
+            winner, loser = (home, away)
         winner_avg = (avg[winner] - avg[loser]) / len(victors)
-        avg_winner = winner if winner_avg >=0 else loser
+        avg_winner = winner if winner_avg >= 0 else loser
         return (matchup, avg_winner, abs(winner_avg))
 
-    picks = defaultdict(list)
+    picks = defaultdict(list)  # type: PickMap
 
     rank(picks, guesses, lambda x: x.pyth)
     rank(picks, guesses, lambda x: x.spread)
@@ -198,30 +203,33 @@ def rank_predictions(guesses: List[Guess]) -> Tuple[PickMap, PickMap]:
     rank(picks, guesses, lambda x: x.points)
     rank(picks, guesses, lambda x: x.pyth_spread)
 
-    return (picks, {x[0]: Ranked(x[1], x[2], n+1) for n, x in enumerate(sorted(average_winners, key=lambda k: k[-1]))})
+    return (picks, {x[0]: [Ranked(x[1], x[2], n + 1)]
+                    for n, x in
+                    enumerate(sorted(average_winners, key=lambda k: k[-1]))})
 
 
 def write_predictions(file_: TextIO,
                       pick_map: PickMap,
                       averages: PickMap) -> None:
 
-    def strings(list_):
+    def strings(list_: Sequence[Union[str, int]]) -> List[str]:
         return [str(x) for x in list_]
 
     print('away,home,'
           'avg,avg_r,pyth,pyth_r,spread,spread_r,wins,wins_r,'
           'points,points_r,p_spr,p_spr_r,'
-          'avg\u0394,pyth\u0394,spread\u0394,wins\u0394,points\u0394,p_spr\u0394,'
+          'avg\u0394,pyth\u0394,spread\u0394,wins\u0394,'
+          'points\u0394,p_spr\u0394,'
           'pyth_act,spread_act,wins_act,points_act,p_spr_act', file=file_)
-
 
     for key, val in pick_map.items():
         picks, deltas, ranks = zip(*val)
-        a_pix, a_delts, a_ranx = averages[key]
+        a_pix, a_delts, a_ranx = zip(*averages[key])
         print('{},{},{},0,0,0,0,0'.format(
             ','.join(key),
-            ','.join(interleave([strings((a_pix,) + picks), strings((a_ranx,) + ranks)])),
-            ','.join(strings((a_delts,) + deltas))),
+            ','.join(interleave([strings(a_pix + picks),
+                                 strings(a_ranx + ranks)])),
+            ','.join(strings(a_delts + deltas))),
             file=file_)
 
 
