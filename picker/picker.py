@@ -215,17 +215,18 @@ def write_predictions(file_: TextIO,
     def strings(list_: Sequence[Union[str, int]]) -> List[str]:
         return [str(x) for x in list_]
 
-    print('away,home,'
+    print('away,home,winner,me,me_r,'
           'avg,avg_r,pyth,pyth_r,spread,spread_r,wins,wins_r,'
           'points,points_r,p_spr,p_spr_r,'
           'avg\u0394,pyth\u0394,spread\u0394,wins\u0394,'
           'points\u0394,p_spr\u0394,'
-          'pyth_act,spread_act,wins_act,points_act,p_spr_act', file=file_)
+          'me_act,,pyth_act,,spread_act,,'
+          'wins_act,,points_act,,p_spr_act,', file=file_)
 
     for key, val in pick_map.items():
         picks, deltas, ranks = zip(*val)
         a_pix, a_delts, a_ranx = zip(*averages[key])
-        print('{},{},{},0,0,0,0,0'.format(
+        print('{},,,,{},{},0,,0,,0,,0,,0,,0,'.format(
             ','.join(key),
             ','.join(interleave([strings(a_pix + picks),
                                  strings(a_ranx + ranks)])),
@@ -273,7 +274,7 @@ def spread_scrape(yr: str, wk: str, odds: str) -> Dict[Tuple[str, str], Game]:
     n = 0
     for g in games:
         diffs = parse_spreads(g)
-        spreads = [0 if n == 'Ev' else float(n) for n in diffs if n != '']
+        spreads = [0 if n == 'Ev' or n == '' else float(n) for n in diffs]
         if len(spreads) == 0:
             continue
         avg_spread = \
