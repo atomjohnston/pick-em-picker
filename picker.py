@@ -152,7 +152,7 @@ def picker(file_name: str, spreads_html: str,
     played_games = get_games(file_name)
     team_stats = team_calculator(played_games)
     # for team, stats in team_stats.items():
-    #    print(team, stats)
+    #   print(team, stats)
     simple_rank_calculator(team_stats)
 
     projected_games = spread_scrape(str(year), str(week), spreads_html)
@@ -163,25 +163,35 @@ def picker(file_name: str, spreads_html: str,
 
 
 def simple_rank_calculator(stats: Dict[str, Team]) -> Any:
-    starting_strength = {name: round(t_stats.nike_margin, 2)
-                         for name, t_stats in stats.items()}
+    # 1: get strength of each team, which is "Margin of Victory" (nike_margin)
+    # 2: get strength of opponents, which is the average MoV for all opponents faced
+    # 3: sum MoV + SoS to get SRS
+    # 4: get new SoS based on SRS
 
-    def adjust(strnths):
-        adj_strnths = {}
-        adjustments = []
-        for name, t_stat in stats.items():
-            op_strnth = \
-                round(sum([strnths[tm] for tm in t_stat.record.opponents]) / GAME_COUNT, 2)
-            adj_strnths[name] = round(strnths[name] + op_strnth, 2)
-            adjustments.append(op_strnth)
-        return adj_strnths, adjustments
+    true_mov = {team: int(t_stats.nike_margin * 100)
+                for team, t_stats in stats.items()}
 
-    x, y = adjust(starting_strength)
-    while not all([n != 0.0 for n in y]):
-        x, y = adjust(x)
-    for mer, bler in starting_strength.items():
-        print('start: ', mer, starting_strength[mer])
-        print('end  : ', mer, x[mer])
+    def adjust(mov):
+        srs = {}
+        sos = {}
+        sum_sos = 0
+        for team, t_stat in stats.items():
+            sos[team] = int(sum([mov[tm] for tm in t_stat.record.opponents]) / GAME_COUNT)
+            sum_sos = sum_sos + sos[team]
+            srs[team] = true_mov[team] + sos[team]
+            print(team, 'mov:', true_mov[team]/100, 'sos:',
+                  sos[team]/100, 'srs:', srs[team]/100)
+        return srs, sos, sum_sos
+
+    srs, sos, last_sos = adjust(true_mov)
+    # i = 0
+    while True:  # and i < 6:
+        srs, sos, sum_sos = adjust(srs)
+        if abs(last_sos - sum_sos) < 1:
+            break
+        else:
+            last_sos = sum_sos
+        # i = i + 1
 
 
 def rank_predictions(guesses: List[Guess]) -> Tuple[PickMap, PickMap]:
