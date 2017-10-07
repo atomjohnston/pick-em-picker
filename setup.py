@@ -3,7 +3,7 @@ from setuptools import setup
 
 setup(
     name='pick-em-picker',
-    packages=['pick-em-picker'],
+    py_modules=['pick-em-picker'],
     install_requires=[
         'lxml>=3.8.0',
         'requests>=2.18.4',
