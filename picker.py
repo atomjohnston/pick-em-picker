@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 
 
-"""Pick Picker
+"""Pro Football Pick 'Em Picker
 
 
 Usage:
-  picker.py get-results <year> <start-week> [<end-week>] [--output CSV]
-  picker.py make-picks <records-file> <year> <week>
+  pick-em get-results <year> <start-week> [<end-week>] [--output CSV]
+  pick-em make-picks <records-file> <year> <week>
             [--output CSV] [--spread HTML]
 
 
@@ -335,7 +335,7 @@ def score_scrape(yr: int, wk_from: int, wk_to: int) -> str:
         scrape_weeks(yr, wk_from, wk_to)
 
 
-def main(write_fh: TextIO, doc: Any) -> None:
+def run(write_fh: TextIO, doc: Any) -> None:
     if doc['get-results']:
         csv = score_scrape(
             int(doc['<year>']), int(doc['<start-week>']),
@@ -351,10 +351,14 @@ def main(write_fh: TextIO, doc: Any) -> None:
         spread_scrape(doc['<year>'], doc['<week>'], doc['<file>'])
 
 
-if __name__ == '__main__':
+def main():
     doc = docopt(__doc__)
     write_fh = open(doc['--output'], 'w') if doc['--output'] else sys.stdout
     try:
-        main(write_fh, doc)
+        run(write_fh, doc)
     finally:
         write_fh.close()
+
+
+if __name__ == '__main__':
+    main()
