@@ -45,8 +45,9 @@ Game = NamedTuple('Game', [('sort_key', int), ('year', int), ('week', int),
 Record = NamedTuple('Record', [('name', str), ('points', IntPair),
                                ('record', IntPair), ('opponents', Opponents)])
 
+# nike_margin == 'margin of victory'
 Team = NamedTuple('Team', [('name', str), ('win_p', float), ('pyth', float),
-                           ('point_diff_avg', float), ('point_avg', float),
+                           ('nike_margin', float), ('point_avg', float),
                            ('record', Record)])
 
 Pick = NamedTuple('Pick', [('won', str), ('lost', str), ('delta', float)])
@@ -62,6 +63,8 @@ Matchup = Tuple[str, str]
 
 PickMap = Dict[Matchup, List[Ranked]]
 
+GAME_COUNT = 16
+EXP = 2.37
 
 def new_game(year: str, week: str, away: str, ascore: str,
              home: str, hscore: str) -> Game:
@@ -70,9 +73,6 @@ def new_game(year: str, week: str, away: str, ascore: str,
 
 
 def team_calculator(games: List[Game]) -> Dict[str, Team]:
-
-    GAME_COUNT = 16
-    EXP = 2.37
 
     def add_records(r1: Record, r2: Record) -> Record:
         if sum(r1.record) == GAME_COUNT:
@@ -102,7 +102,7 @@ def team_calculator(games: List[Game]) -> Dict[str, Team]:
             add_records(
                 loser, Record(loser.name, (min(score), max(score)), (0, 1), (winner.name,))))
 
-    def calc_team(name, rec):
+    def calc_team(name: str, rec: Record) -> Team:
         return Team(name, rec.record[0]/GAME_COUNT,
                     rec.points[0]**EXP/(rec.points[0]**EXP+rec.points[1]**EXP),
                     operator.sub(*rec.points)/GAME_COUNT,
@@ -145,20 +145,43 @@ def picker(file_name: str, spreads_html: str,
         return Guess(
             away=away, home=home,
             pyth=pick(away, away.pyth, home, home.pyth),
-            points=pick(away, away.point_diff_avg, home, home.point_diff_avg),
+            points=pick(away, away.nike_margin, home, home.nike_margin),
             wins=pick(away, away.win_p, home, home.win_p),
             spread=pick(away, p_game.away_pts, home, p_game.home_pts))
 
     played_games = get_games(file_name)
     team_stats = team_calculator(played_games)
-    for team, stats in team_stats.items():
-        print(team, stats)
+    # for team, stats in team_stats.items():
+    #    print(team, stats)
+    simple_rank_calculator(team_stats)
 
     projected_games = spread_scrape(str(year), str(week), spreads_html)
-
     guessing_games = score_scrape(year, week, -1).split('\n')
+
     return [guess(team_stats, game, projected_games) for game in
             [csv2game(line) for line in guessing_games]]
+
+
+def simple_rank_calculator(stats: Dict[str, Team]) -> Any:
+    starting_strength = {name: round(t_stats.nike_margin, 2)
+                         for name, t_stats in stats.items()}
+
+    def adjust(strnths):
+        adj_strnths = {}
+        adjustments = []
+        for name, t_stat in stats.items():
+            op_strnth = \
+                round(sum([strnths[tm] for tm in t_stat.record.opponents]) / GAME_COUNT, 2)
+            adj_strnths[name] = round(strnths[name] + op_strnth, 2)
+            adjustments.append(op_strnth)
+        return adj_strnths, adjustments
+
+    x, y = adjust(starting_strength)
+    while not all([n != 0.0 for n in y]):
+        x, y = adjust(x)
+    for mer, bler in starting_strength.items():
+        print('start: ', mer, starting_strength[mer])
+        print('end  : ', mer, x[mer])
 
 
 def rank_predictions(guesses: List[Guess]) -> Tuple[PickMap, PickMap]:
