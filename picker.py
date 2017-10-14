@@ -6,13 +6,15 @@
 
 Usage:
   pick-em get-results <year> <start-week> [<end-week>] [--output CSV]
+  pick-em simple-ranking <records-file> <year> <start-week>
   pick-em make-picks <records-file> <year> <week>
-            [--output CSV] [--spread HTML]
+            [--output CSV] [--spread HTML] [--season]
 
 
 Options:
   -o --output CSV    output to CSV file, instead of default STDOUT
   -s --spread HTML   HTML file of OddsShark odds page
+  --season           just run numbers for this season
   -h --help          display this help
 
 
@@ -29,9 +31,10 @@ from concurrent import futures
 from docopt import docopt
 from itertools import repeat, islice
 from lxml import html  # type: ignore
-from toolz import interleave, frequencies, concat
+from toolz import interleave, frequencies, concat, pipe
 from typing import (NamedTuple, Tuple, TextIO, Any, List, Dict, Callable,
                     Sequence, Union)
+from pprint import pprint
 
 
 IntPair = Tuple[Any, ...]
@@ -45,9 +48,8 @@ Game = NamedTuple('Game', [('sort_key', int), ('year', int), ('week', int),
 Record = NamedTuple('Record', [('name', str), ('points', IntPair),
                                ('record', IntPair), ('opponents', Opponents)])
 
-# nike_margin == 'margin of victory'
 Team = NamedTuple('Team', [('name', str), ('win_p', float), ('pyth', float),
-                           ('nike_margin', float), ('point_avg', float),
+                           ('mov', float), ('point_avg', float),
                            ('record', Record)])
 
 Pick = NamedTuple('Pick', [('won', str), ('lost', str), ('delta', float)])
@@ -63,7 +65,6 @@ Matchup = Tuple[str, str]
 
 PickMap = Dict[Matchup, List[Ranked]]
 
-GAME_COUNT = 16
 EXP = 2.37
 
 def new_game(year: str, week: str, away: str, ascore: str,
@@ -72,10 +73,10 @@ def new_game(year: str, week: str, away: str, ascore: str,
                 int(week), away, float(ascore), home, float(hscore))
 
 
-def team_calculator(games: List[Game]) -> Dict[str, Team]:
+def calculate_team_stats(games: List[Game]) -> Dict[str, Team]:
 
     def add_records(r1: Record, r2: Record) -> Record:
-        if sum(r1.record) == GAME_COUNT:
+        if sum(r1.record) >= 16:
             return r1
         else:
             return Record(
@@ -96,17 +97,14 @@ def team_calculator(games: List[Game]) -> Dict[str, Team]:
         winner, loser = (a_rec, h_rec) if game.away_pts > game.home_pts else \
                         (h_rec, a_rec)
         score = (game.away_pts, game.home_pts)
-        return (
-            add_records(
-                winner, Record(winner.name, (max(score), min(score)), (1, 0), (loser.name,))),
-            add_records(
-                loser, Record(loser.name, (min(score), max(score)), (0, 1), (winner.name,))))
+        return (add_records(winner, Record(winner.name, (max(score), min(score)), (1, 0), (loser.name,))),
+            add_records(loser, Record(loser.name, (min(score), max(score)), (0, 1), (winner.name,))))
 
     def calc_team(name: str, rec: Record) -> Team:
-        return Team(name, rec.record[0]/GAME_COUNT,
+        return Team(name, rec.record[0]/sum(rec.record),
                     rec.points[0]**EXP/(rec.points[0]**EXP+rec.points[1]**EXP),
-                    operator.sub(*rec.points)/GAME_COUNT,
-                    rec.points[0]/GAME_COUNT, rec)
+                    operator.sub(*rec.points)/sum(rec.record),
+                    rec.points[0]/sum(rec.record), rec)
 
     records = {}  # type: Dict[str, Record]
 
@@ -121,16 +119,18 @@ def team_calculator(games: List[Game]) -> Dict[str, Team]:
     return {team: calc_team(team, record) for team, record in records.items()}
 
 
-def picker(file_name: str, spreads_html: str,
+def csv2game(line: str) -> Game:
+    return new_game(*line.strip().split(','))
+
+
+def get_played_games(scores_file: str) -> List[Game]:
+    with open(scores_file, 'r') as fh:
+        return sorted([csv2game(line) for line in fh.readlines()],
+                      key=lambda g: g.sort_key, reverse=True)
+
+
+def picker(team_stats: Dict[str, Team], spreads_html: str,
            year: int, week: int) -> List[Guess]:
-
-    def csv2game(line: str) -> Game:
-        return new_game(*line.strip().split(','))
-
-    def get_games(file_name: str) -> List[Game]:
-        with open(file_name, 'r') as fh:
-            return sorted([csv2game(line) for line in fh.readlines()],
-                          key=lambda g: g.sort_key, reverse=True)
 
     def pick(away: Team, a_val: float, home: Team, h_val: float) -> Pick:
         if a_val > h_val:
@@ -145,15 +145,10 @@ def picker(file_name: str, spreads_html: str,
         return Guess(
             away=away, home=home,
             pyth=pick(away, away.pyth, home, home.pyth),
-            points=pick(away, away.nike_margin, home, home.nike_margin),
+            points=pick(away, away.mov, home, home.mov),
             wins=pick(away, away.win_p, home, home.win_p),
             spread=pick(away, p_game.away_pts, home, p_game.home_pts))
 
-    played_games = get_games(file_name)
-    team_stats = team_calculator(played_games)
-    # for team, stats in team_stats.items():
-    #   print(team, stats)
-    simple_rank_calculator(team_stats)
 
     projected_games = spread_scrape(str(year), str(week), spreads_html)
     guessing_games = score_scrape(year, week, -1).split('\n')
@@ -163,35 +158,60 @@ def picker(file_name: str, spreads_html: str,
 
 
 def simple_rank_calculator(stats: Dict[str, Team]) -> Any:
-    # 1: get strength of each team, which is "Margin of Victory" (nike_margin)
+    # 1: get strength of each team, which is "Margin of Victory" (mov)
     # 2: get strength of opponents, which is the average MoV for all opponents faced
     # 3: sum MoV + SoS to get SRS
     # 4: get new SoS based on SRS
 
-    true_mov = {team: int(t_stats.nike_margin * 100)
+    x = 1000
+    iter_ = 0
+    true_mov = {team: int(t_stats.mov * x)
                 for team, t_stats in stats.items()}
 
-    def adjust(mov):
-        srs = {}
-        sos = {}
-        sum_sos = 0
-        for team, t_stat in stats.items():
-            sos[team] = int(sum([mov[tm] for tm in t_stat.record.opponents]) / GAME_COUNT)
-            sum_sos = sum_sos + sos[team]
-            srs[team] = true_mov[team] + sos[team]
-            print(team, 'mov:', true_mov[team]/100, 'sos:',
-                  sos[team]/100, 'srs:', srs[team]/100)
-        return srs, sos, sum_sos
+    def get_last_srs(old, new, team):
+        try:
+            return old[team]
+            # return new[team]
+        except KeyError:
+            return old[team]
 
-    srs, sos, last_sos = adjust(true_mov)
+    def adjust(srs, sos, iter_):
+        new_srs, delta = {}, 0
+        iter_ += 1
+        for team, t_stat in stats.items():
+            # if team == 'dolphins':
+            #    print({o_tm: srs[o_tm] for o_tm in t_stat.record.opponents})
+            try:
+                prev_sos = sos[team]
+            except KeyError:
+                prev_sos = 0
+            sos[team] = int(sum([get_last_srs(srs, new_srs, o_tm) for o_tm in t_stat.record.opponents]) / sum(t_stat.record.record))
+            delta = max(delta, abs(sos[team] - prev_sos))
+            new_srs[team] = true_mov[team] + sos[team]
+            # if team == 'dolphins':
+            #     # print(true_mov[team], '+', sos[team])
+            #     print(team, 'mov:', true_mov[team]/x, 'sos:', sos[team]/x,
+            #             'new_srs:', new_srs[team]/x, 'delta:', delta, 'gp:', sum(t_stat.record.record))
+        return new_srs, sos, delta, iter_
+
+    srs, sos, delta, iter_ = adjust(true_mov, {}, iter_)
     # i = 0
-    while True:  # and i < 6:
-        srs, sos, sum_sos = adjust(srs)
-        if abs(last_sos - sum_sos) < 1:
-            break
-        else:
-            last_sos = sum_sos
+    # while True: # and i < 100:
+    while delta > 0: # and iter_ < 3:
+        # print('last:', last_sos, 'current:', sum_sos, 'delta:', abs(last_sos - sum_sos), 'done:', done)
+        srs, sos, delta, iter_ = adjust(srs, sos, iter_)
+        # if abs(last_sos - sum_sos) < 1:
+        #     break
+        # else:
+        #     last_sos = sum_sos
         # i = i + 1
+    avg = sum(srs.values()) / len(srs)
+    print(avg)
+    for team in sorted(stats.keys(), key=lambda k: srs[k]):
+        # print(true_mov[team], '+', sos[team])
+        print(team, 'mov:', true_mov[team]/x, 'sos:', sos[team]/x, 'srs:',
+                (srs[team]-avg)/x, 'gp:', sum(stats[team].record.record))
+    #print(iter_)
 
 
 def rank_predictions(guesses: List[Guess]) -> Tuple[PickMap, PickMap]:
@@ -245,11 +265,11 @@ def write_predictions(file_: TextIO,
 
     print('away,home,winner,me,me_r,'
           'avg,avg_r,pyth,pyth_r,spread,spread_r,wins,wins_r,'
-          'points,points_r,p_spr,p_spr_r,'
+          'points,points_r,'
           'avg\u0394,pyth\u0394,spread\u0394,wins\u0394,'
-          'points\u0394,p_spr\u0394,'
+          'points\u0394,'
           'me_act,,pyth_act,,spread_act,,'
-          'wins_act,,points_act,,p_spr_act,', file=file_)
+          'wins_act,,points_act,,', file=file_)
 
     for key, val in pick_map.items():
         picks, deltas, ranks = zip(*val)
@@ -370,13 +390,14 @@ def run(write_fh: TextIO, doc: Any) -> None:
             -1 if not doc['<end-week>'] else int(doc['<end-week>']))
         write_fh.write(csv)
     elif doc['make-picks']:
+        team_stats = pipe(doc['<records-file>'], get_played_games, calculate_team_stats)
         predictions = picker(
-            doc['<records-file>'], doc['--spread'],
+            team_stats, doc['--spread'],
             int(doc['<year>']), int(doc['<week>']))
         ranks, averages = rank_predictions(predictions)
         write_predictions(write_fh, ranks, averages)
-    elif doc['spread-scrape']:
-        spread_scrape(doc['<year>'], doc['<week>'], doc['<file>'])
+    elif doc['simple-ranking']:
+        pipe(doc['<records-file>'], get_played_games, calculate_team_stats, simple_rank_calculator)
 
 
 def main():
