@@ -49,8 +49,7 @@ Record = NamedTuple('Record', [('name', str), ('points', IntPair),
                                ('record', IntPair), ('opponents', Opponents)])
 
 Team = NamedTuple('Team', [('name', str), ('win_p', float), ('pyth', float),
-                           ('mov', float), ('point_avg', float),
-                           ('record', Record)])
+                           ('mov', float), ('record', Record), ('srs', float)])
 
 Pick = NamedTuple('Pick', [('won', str), ('lost', str), ('delta', float)])
 
@@ -59,13 +58,14 @@ Ranked = NamedTuple('Ranked', [('victor', str), ('delta', float),
 
 Guess = NamedTuple('Guess', [('away', Team), ('home', Team), ('pyth', Pick),
                              ('points', Pick), ('wins', Pick),
-                             ('spread', Pick)])
+                             ('spread', Pick), ('srs', Pick)])
 
 Matchup = Tuple[str, str]
 
 PickMap = Dict[Matchup, List[Ranked]]
 
 EXP = 2.37
+SRS_X = 1000
 
 def new_game(year: str, week: str, away: str, ascore: str,
              home: str, hscore: str) -> Game:
@@ -103,8 +103,7 @@ def calculate_team_stats(games: List[Game]) -> Dict[str, Team]:
     def calc_team(name: str, rec: Record) -> Team:
         return Team(name, rec.record[0]/sum(rec.record),
                     rec.points[0]**EXP/(rec.points[0]**EXP+rec.points[1]**EXP),
-                    operator.sub(*rec.points)/sum(rec.record),
-                    rec.points[0]/sum(rec.record), rec)
+                    operator.sub(*rec.points)/sum(rec.record), rec, 0.0)
 
     records = {}  # type: Dict[str, Record]
 
@@ -134,9 +133,9 @@ def picker(team_stats: Dict[str, Team], spreads_html: str,
 
     def pick(away: Team, a_val: float, home: Team, h_val: float) -> Pick:
         if a_val > h_val:
-            return Pick(away.name, home.name, a_val - h_val)
+            return Pick(away.name, home.name, abs(a_val - h_val))
         else:
-            return Pick(home.name, away.name, h_val - a_val)
+            return Pick(home.name, away.name, abs(h_val - a_val))
 
     def guess(stats: Dict[str, Team], game: Game,
               projected_winners: Dict[Matchup, Game]) -> Guess:
@@ -147,6 +146,7 @@ def picker(team_stats: Dict[str, Team], spreads_html: str,
             pyth=pick(away, away.pyth, home, home.pyth),
             points=pick(away, away.mov, home, home.mov),
             wins=pick(away, away.win_p, home, home.win_p),
+            srs=pick(away, away.srs, home, home.srs + (2 * SRS_X)),
             spread=pick(away, p_game.away_pts, home, p_game.home_pts))
 
 
@@ -157,61 +157,37 @@ def picker(team_stats: Dict[str, Team], spreads_html: str,
             [csv2game(line) for line in guessing_games]]
 
 
-def simple_rank_calculator(stats: Dict[str, Team]) -> Any:
-    # 1: get strength of each team, which is "Margin of Victory" (mov)
-    # 2: get strength of opponents, which is the average MoV for all opponents faced
-    # 3: sum MoV + SoS to get SRS
-    # 4: get new SoS based on SRS
+def simple_ranking(stats: Dict[str, Team]) -> Any:
 
-    x = 1000
-    iter_ = 0
-    true_mov = {team: int(t_stats.mov * x)
-                for team, t_stats in stats.items()}
-
-    def get_last_srs(old, new, team):
-        try:
-            return old[team]
-            # return new[team]
-        except KeyError:
-            return old[team]
-
-    def adjust(srs, sos, iter_):
+    def adjust(srs, sos):
         new_srs, delta = {}, 0
-        iter_ += 1
         for team, t_stat in stats.items():
-            # if team == 'dolphins':
-            #    print({o_tm: srs[o_tm] for o_tm in t_stat.record.opponents})
-            try:
-                prev_sos = sos[team]
-            except KeyError:
-                prev_sos = 0
-            sos[team] = int(sum([get_last_srs(srs, new_srs, o_tm) for o_tm in t_stat.record.opponents]) / sum(t_stat.record.record))
+            prev_sos = sos[team]
+            sos[team] = int(sum([srs[t] for t in t_stat.record.opponents]) /
+                            sum(t_stat.record.record))
             delta = max(delta, abs(sos[team] - prev_sos))
             new_srs[team] = true_mov[team] + sos[team]
-            # if team == 'dolphins':
-            #     # print(true_mov[team], '+', sos[team])
-            #     print(team, 'mov:', true_mov[team]/x, 'sos:', sos[team]/x,
-            #             'new_srs:', new_srs[team]/x, 'delta:', delta, 'gp:', sum(t_stat.record.record))
-        return new_srs, sos, delta, iter_
+        return new_srs, sos, delta
 
-    srs, sos, delta, iter_ = adjust(true_mov, {}, iter_)
-    # i = 0
-    # while True: # and i < 100:
-    while delta > 0: # and iter_ < 3:
-        # print('last:', last_sos, 'current:', sum_sos, 'delta:', abs(last_sos - sum_sos), 'done:', done)
-        srs, sos, delta, iter_ = adjust(srs, sos, iter_)
-        # if abs(last_sos - sum_sos) < 1:
-        #     break
-        # else:
-        #     last_sos = sum_sos
-        # i = i + 1
-    avg = sum(srs.values()) / len(srs)
-    print(avg)
-    for team in sorted(stats.keys(), key=lambda k: srs[k]):
-        # print(true_mov[team], '+', sos[team])
-        print(team, 'mov:', true_mov[team]/x, 'sos:', sos[team]/x, 'srs:',
-                (srs[team]-avg)/x, 'gp:', sum(stats[team].record.record))
-    #print(iter_)
+    def set_srs(team, srs):
+        team_values = [*team]
+        team_values[-1] = srs 
+        return Team(*team_values)
+
+
+    true_mov = {team: int(t_stats.mov * SRS_X)
+                for team, t_stats in stats.items()}
+
+    srs, sos, delta = adjust(true_mov, defaultdict(lambda: 0))
+
+    delta_ = 1
+    while delta > 0 and delta != delta_:
+        delta_ = delta
+        srs, sos, delta = adjust(srs, sos)
+
+
+    avg = int((sum(srs.values()) / len(srs)) + 0.5)
+    return {_: set_srs(tm, srs[tm.name] - avg) for _, tm in stats.items()}
 
 
 def rank_predictions(guesses: List[Guess]) -> Tuple[PickMap, PickMap]:
@@ -250,6 +226,7 @@ def rank_predictions(guesses: List[Guess]) -> Tuple[PickMap, PickMap]:
     average_winners = [average_rank(k, v) for k, v in picks.items()]
 
     rank(picks, guesses, lambda x: x.points)
+    rank(picks, guesses, lambda x: x.srs)
 
     return (picks, {x[0]: [Ranked(x[1], x[2], n + 1)]
                     for n, x in
@@ -265,11 +242,11 @@ def write_predictions(file_: TextIO,
 
     print('away,home,winner,me,me_r,'
           'avg,avg_r,pyth,pyth_r,spread,spread_r,wins,wins_r,'
-          'points,points_r,'
+          'points,points_r,srs,srs_r,'
           'avg\u0394,pyth\u0394,spread\u0394,wins\u0394,'
-          'points\u0394,'
+          'points\u0394,srs\u0394,'
           'me_act,,pyth_act,,spread_act,,'
-          'wins_act,,points_act,,', file=file_)
+          'wins_act,,points_act,,srs_act,,', file=file_)
 
     for key, val in pick_map.items():
         picks, deltas, ranks = zip(*val)
@@ -389,15 +366,18 @@ def run(write_fh: TextIO, doc: Any) -> None:
             int(doc['<year>']), int(doc['<start-week>']),
             -1 if not doc['<end-week>'] else int(doc['<end-week>']))
         write_fh.write(csv)
-    elif doc['make-picks']:
-        team_stats = pipe(doc['<records-file>'], get_played_games, calculate_team_stats)
-        predictions = picker(
-            team_stats, doc['--spread'],
-            int(doc['<year>']), int(doc['<week>']))
-        ranks, averages = rank_predictions(predictions)
-        write_predictions(write_fh, ranks, averages)
-    elif doc['simple-ranking']:
-        pipe(doc['<records-file>'], get_played_games, calculate_team_stats, simple_rank_calculator)
+    else:
+        teams = pipe(doc['<records-file>'], get_played_games, calculate_team_stats, simple_ranking)
+        if doc['make-picks']:
+            predictions = picker(
+                teams, doc['--spread'],
+                int(doc['<year>']), int(doc['<week>']))
+            ranks, averages = rank_predictions(predictions)
+            write_predictions(write_fh, ranks, averages)
+        elif doc['simple-ranking']:
+            for t in sorted(teams.values(), key=lambda x: x.srs, reverse=True):
+                # print('{0:12s} {1:6.2f}'.format(t.name, t.srs/SRS_X))
+                print('{0:12s} {1:6}'.format(t.name, t.srs))
 
 
 def main():
