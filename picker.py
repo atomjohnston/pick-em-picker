@@ -67,6 +67,7 @@ PickMap = Dict[Matchup, List[Ranked]]
 EXP = 2.37
 SRS_X = 1000
 
+
 def new_game(year: str, week: str, away: str, ascore: str,
              home: str, hscore: str) -> Game:
     return Game(int(str(year) + '{0:0>2}'.format(week)), int(year),
@@ -90,7 +91,7 @@ def calculate_team_stats(games: List[Game]) -> Dict[str, Team]:
 
     def get_record(name: str, records: Dict[str, Record]) -> Record:
         return records[name] if name in records else \
-               Record(name=name, points=(0, 0), record=(0, 0), opponents=())
+            Record(name=name, points=(0, 0), record=(0, 0), opponents=())
 
     def eval_game(game: Game, a_rec: Record,
                   h_rec: Record) -> Tuple[Record, Record]:
@@ -98,12 +99,13 @@ def calculate_team_stats(games: List[Game]) -> Dict[str, Team]:
                         (h_rec, a_rec)
         score = (game.away_pts, game.home_pts)
         return (add_records(winner, Record(winner.name, (max(score), min(score)), (1, 0), (loser.name,))),
-            add_records(loser, Record(loser.name, (min(score), max(score)), (0, 1), (winner.name,))))
+                add_records(loser, Record(loser.name, (min(score), max(score)), (0, 1), (winner.name,))))
 
     def calc_team(name: str, rec: Record) -> Team:
-        return Team(name, rec.record[0]/sum(rec.record),
-                    rec.points[0]**EXP/(rec.points[0]**EXP+rec.points[1]**EXP),
-                    operator.sub(*rec.points)/sum(rec.record), rec, 0.0)
+        return Team(name, rec.record[0] / sum(rec.record),
+                    rec.points[0]**EXP /
+                    (rec.points[0]**EXP + rec.points[1]**EXP),
+                    operator.sub(*rec.points) / sum(rec.record), rec, 0.0)
 
     records = {}  # type: Dict[str, Record]
 
@@ -149,7 +151,6 @@ def picker(team_stats: Dict[str, Team], spreads_html: str,
             srs=pick(away, away.srs, home, home.srs + (2 * SRS_X)),
             spread=pick(away, p_game.away_pts, home, p_game.home_pts))
 
-
     projected_games = spread_scrape(str(year), str(week), spreads_html)
     guessing_games = score_scrape(year, week, -1).split('\n')
 
@@ -157,9 +158,10 @@ def picker(team_stats: Dict[str, Team], spreads_html: str,
             [csv2game(line) for line in guessing_games]]
 
 
-def simple_ranking(stats: Dict[str, Team]) -> Any:
+def simple_ranking(stats: Dict[str, Team]) -> Dict[str, Team]:
 
-    def adjust(srs, sos):
+    def adjust(srs: Dict[str, int], sos: Dict[str, int]
+               ) -> Tuple[Dict[str, int], Dict[str, int], int]:
         new_srs, delta = {}, 0
         for team, t_stat in stats.items():
             prev_sos = sos[team]
@@ -169,11 +171,10 @@ def simple_ranking(stats: Dict[str, Team]) -> Any:
             new_srs[team] = true_mov[team] + sos[team]
         return new_srs, sos, delta
 
-    def set_srs(team, srs):
+    def set_srs(team: Team, srs: int) -> Team:
         team_values = [*team]
-        team_values[-1] = srs 
-        return Team(*team_values)
-
+        team_values[-1] = srs
+        return Team(*team_values)  # type: ignore
 
     true_mov = {team: int(t_stats.mov * SRS_X)
                 for team, t_stats in stats.items()}
@@ -184,7 +185,6 @@ def simple_ranking(stats: Dict[str, Team]) -> Any:
     while delta > 0 and delta != delta_:
         delta_ = delta
         srs, sos, delta = adjust(srs, sos)
-
 
     avg = int((sum(srs.values()) / len(srs)) + 0.5)
     return {_: set_srs(tm, srs[tm.name] - avg) for _, tm in stats.items()}
@@ -292,7 +292,7 @@ def spread_scrape(yr: str, wk: str, odds: str) -> Dict[Tuple[str, str], Game]:
                 g.xpath('div/div[starts-with(@class, "op-item op-spread")]')]
 
     teams, games = parse_odds_xml(odds)
-    matchups = [(team_map[teams[n]], team_map[teams[n+1]])
+    matchups = [(team_map[teams[n]], team_map[teams[n + 1]])
                 for n in range(0, len(teams) - 1, 2)]
 
     predictions = {}  # type: Dict[Tuple[str, str], Game]
@@ -346,7 +346,7 @@ def score_scrape(yr: int, wk_from: int, wk_to: int) -> str:
 
     def scrape_single(yr: int, week: int) -> str:
         return '\n'.join([str.lower(game_csv(yr, week, game))
-                         for game in select_games(fetch_page_html(yr, week))])
+                          for game in select_games(fetch_page_html(yr, week))])
 
     def scrape_weeks(yr: int, wk_from: int, wk_to: int) -> str:
         step = 1 if wk_from < wk_to else -1
@@ -367,7 +367,8 @@ def run(write_fh: TextIO, doc: Any) -> None:
             -1 if not doc['<end-week>'] else int(doc['<end-week>']))
         write_fh.write(csv)
     else:
-        teams = pipe(doc['<records-file>'], get_played_games, calculate_team_stats, simple_ranking)
+        teams = pipe(doc['<records-file>'], get_played_games,
+                     calculate_team_stats, simple_ranking)
         if doc['make-picks']:
             predictions = picker(
                 teams, doc['--spread'],
