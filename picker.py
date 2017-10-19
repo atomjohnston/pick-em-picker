@@ -5,16 +5,21 @@
 
 
 Usage:
-  pick-em get-results <year> <start-week> [<end-week>] [--output CSV]
-  pick-em simple-ranking <records-file> <year> <start-week>
-  pick-em make-picks <records-file> <year> <week>
-            [--output CSV] [--spread HTML] [--season]
+  pick-em get-results <date-range> [--output CSV]
+  pick-em simple-ranking <records-file> <pick-week> [<date-range>]
+  pick-em make-picks <records-file> <pick-week>
+                     [<date-range>] [--output CSV] [--spread HTML]
 
+Arguments:
+  pick-week     year:week i.e. 2017:07
+  date-range    date range like 2017:01-2017:07 (inclusive)
+  records-file  CSV containing game results
+  CSV           file to write CSV output (default: STDOUT)
+  HTML          HTML file containing OddsShark NFL spread page
 
 Options:
   -o --output CSV    output to CSV file, instead of default STDOUT
   -s --spread HTML   HTML file of OddsShark odds page
-  --season           just run numbers for this season
   -h --help          display this help
 
 
@@ -29,9 +34,9 @@ import sys
 from collections import namedtuple, defaultdict
 from concurrent import futures
 from docopt import docopt
-from itertools import repeat, islice
+from itertools import repeat, islice, dropwhile, takewhile
 from lxml import html  # type: ignore
-from toolz import interleave, frequencies, concat, pipe
+from toolz import interleave, frequencies, pipe
 from typing import (NamedTuple, Tuple, TextIO, Any, List, Dict, Callable,
                     Sequence, Union)
 from pprint import pprint
@@ -40,6 +45,8 @@ from pprint import pprint
 IntPair = Tuple[Any, ...]
 
 Opponents = Tuple[str, ...]
+
+Week = Tuple[int, int]
 
 Game = NamedTuple('Game', [('sort_key', int), ('year', int), ('week', int),
                            ('away', str), ('away_pts', float),
@@ -70,8 +77,12 @@ SRS_X = 1000
 
 def new_game(year: str, week: str, away: str, ascore: str,
              home: str, hscore: str) -> Game:
-    return Game(int(str(year) + '{0:0>2}'.format(week)), int(year),
+    return Game(to_sort_key(year, week), int(year),
                 int(week), away, float(ascore), home, float(hscore))
+
+
+def to_sort_key(year: Any, week: Any) -> int:
+    return int(str(year) + '{0:0>2}'.format(week))
 
 
 def calculate_team_stats(games: List[Game]) -> Dict[str, Team]:
@@ -98,8 +109,11 @@ def calculate_team_stats(games: List[Game]) -> Dict[str, Team]:
         winner, loser = (a_rec, h_rec) if game.away_pts > game.home_pts else \
                         (h_rec, a_rec)
         score = (game.away_pts, game.home_pts)
-        return (add_records(winner, Record(winner.name, (max(score), min(score)), (1, 0), (loser.name,))),
-                add_records(loser, Record(loser.name, (min(score), max(score)), (0, 1), (winner.name,))))
+        w_rec = add_records(
+            winner, Record(winner.name, (max(score), min(score)), (1, 0), (loser.name,)))
+        l_rec = add_records(
+            loser, Record(loser.name, (min(score), max(score)), (0, 1), (winner.name,)))
+        return w_rec, l_rec
 
     def calc_team(name: str, rec: Record) -> Team:
         return Team(name, rec.record[0] / sum(rec.record),
@@ -109,6 +123,7 @@ def calculate_team_stats(games: List[Game]) -> Dict[str, Team]:
 
     records = {}  # type: Dict[str, Record]
 
+    # print(len(games))
     for game in games:
         records[game.away] = get_record(game.away, records)
         records[game.home] = get_record(game.home, records)
@@ -124,10 +139,22 @@ def csv2game(line: str) -> Game:
     return new_game(*line.strip().split(','))
 
 
-def get_played_games(scores_file: str) -> List[Game]:
+def get_played_games(scores_file: str, start: Week, end: Week) -> List[Game]:
+    games = []
+    s_key, e_key = to_sort_key(*start), to_sort_key(*end)
     with open(scores_file, 'r') as fh:
-        return sorted([csv2game(line) for line in fh.readlines()],
-                      key=lambda g: g.sort_key, reverse=True)
+        for game in [csv2game(line) for line in fh.readlines()]:
+            if not (s_key >= game.sort_key and game.sort_key >= e_key):
+                continue
+            try:
+                if game.sort_key > games[0].sort_key:
+                    games.insert(0, game)
+                else:
+                    games.append(game)
+            except IndexError:
+                games.append(game)
+            # print(game.sort_key)
+    return games
 
 
 def picker(team_stats: Dict[str, Team], spreads_html: str,
@@ -360,19 +387,31 @@ def score_scrape(yr: int, wk_from: int, wk_to: int) -> str:
         scrape_weeks(yr, wk_from, wk_to)
 
 
+def get_range(r: str, p: str) -> Tuple[Week, Week]:
+    try:
+        start, end = r.split('-')
+        return year_week(start), year_week(end)
+    except:
+        y, w = year_week(p)
+        return (y, w), (y, 1)
+
+
+def year_week(s: str) -> Week:
+    yr, wk = s.split(':')
+    return int(yr), int(wk)
+
+
 def run(write_fh: TextIO, doc: Any) -> None:
+    range_ = get_range(doc['<date-range>'], doc['<pick-week>'])
+    # print(range_)
     if doc['get-results']:
-        csv = score_scrape(
-            int(doc['<year>']), int(doc['<start-week>']),
-            -1 if not doc['<end-week>'] else int(doc['<end-week>']))
-        write_fh.write(csv)
+        write_fh.write(score_scrape(range_[0][0], range_[0][1], range_[1][1]))
     else:
-        teams = pipe(doc['<records-file>'], get_played_games,
-                     calculate_team_stats, simple_ranking)
+        games = get_played_games(doc['<records-file>'], range_[0], range_[1])
+        teams = pipe(games, calculate_team_stats, simple_ranking)
         if doc['make-picks']:
-            predictions = picker(
-                teams, doc['--spread'],
-                int(doc['<year>']), int(doc['<week>']))
+            pw = year_week(doc['<pick-week>'])
+            predictions = picker(teams, doc['--spread'], pw[0], pw[1])
             ranks, averages = rank_predictions(predictions)
             write_predictions(write_fh, ranks, averages)
         elif doc['simple-ranking']:
