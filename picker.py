@@ -1,6 +1,4 @@
 #!/usr/bin/env python
-
-
 """Pro Football Pick 'Em Picker
 
 
@@ -25,7 +23,6 @@ Options:
 
 """
 
-
 import json
 import operator
 import requests
@@ -41,7 +38,6 @@ from typing import (NamedTuple, Tuple, TextIO, Any, List, Dict, Callable,
                     Sequence, Union)
 from pprint import pprint
 
-
 IntPair = Tuple[Any, ...]
 
 Opponents = Tuple[str, ...]
@@ -49,8 +45,8 @@ Opponents = Tuple[str, ...]
 Week = Tuple[int, int]
 
 Game = NamedTuple('Game', [('sort_key', int), ('year', int), ('week', int),
-                           ('away', str), ('away_pts', float),
-                           ('home', str), ('home_pts', float)])
+                           ('away', str), ('away_pts', float), ('home', str),
+                           ('home_pts', float)])
 
 Record = NamedTuple('Record', [('name', str), ('points', IntPair),
                                ('record', IntPair), ('opponents', Opponents)])
@@ -73,19 +69,20 @@ PickMap = Dict[Matchup, List[Ranked]]
 
 EXP = 2.37
 SRS_X = 1000
-NICKNAMES = frozenset(['49ers', 'bears', 'bengals', 'bills', 'broncos',
-                       'browns', 'buccaneers', 'cardinals', 'chargers',
-                       'chiefs', 'colts', 'cowboys', 'dolphins', 'eagles',
-                       'falcons', 'giants', 'jaguars', 'jets', 'lions',
-                       'packers', 'panthers', 'patriots', 'raiders', 'rams',
-                       'ravens', 'redskins', 'saints', 'seahawks', 'steelers',
-                       'texans', 'titans', 'vikings'])
+NICKNAMES = frozenset([
+    '49ers', 'bears', 'bengals', 'bills', 'broncos', 'browns', 'buccaneers',
+    'cardinals', 'chargers', 'chiefs', 'colts', 'cowboys', 'dolphins',
+    'eagles', 'falcons', 'giants', 'jaguars', 'jets', 'lions', 'packers',
+    'panthers', 'patriots', 'raiders', 'rams', 'ravens', 'redskins', 'saints',
+    'seahawks', 'steelers', 'texans', 'titans', 'vikings'
+])
 
 
-def new_game(year: str, week: str, away: str, ascore: str,
-             home: str, hscore: str) -> Game:
-    return Game(to_sort_key(year, week), int(year),
-                int(week), away, float(ascore), home, float(hscore))
+def new_game(year: str, week: str, away: str, ascore: str, home: str,
+             hscore: str) -> Game:
+    return Game(
+        to_sort_key(year, week), int(year), int(week), away, float(ascore),
+        home, float(hscore))
 
 
 def to_sort_key(year: Any, week: Any) -> int:
@@ -93,7 +90,6 @@ def to_sort_key(year: Any, week: Any) -> int:
 
 
 def calculate_team_stats(games: List[Game]) -> Dict[str, Team]:
-
     def add_records(r1: Record, r2: Record) -> Record:
         if sum(r1.record) >= 16:
             return r1
@@ -109,32 +105,35 @@ def calculate_team_stats(games: List[Game]) -> Dict[str, Team]:
 
     def eval_game(game: Game, a_rec: Record,
                   h_rec: Record) -> Tuple[Record, Record]:
-        winner, loser = (a_rec, h_rec) if game.away_pts > game.home_pts else \
-                        (h_rec, a_rec)
+        winner, loser = (a_rec,
+                         h_rec) if game.away_pts > game.home_pts else (h_rec,
+                                                                       a_rec)
         score = (game.away_pts, game.home_pts)
-        w_rec = add_records(
-            winner, Record(winner.name, (max(score), min(score)), (1, 0), (loser.name,)))
-        l_rec = add_records(
-            loser, Record(loser.name, (min(score), max(score)), (0, 1), (winner.name,)))
+        w_rec = add_records(winner,
+                            Record(winner.name, (max(score), min(score)),
+                                   (1, 0), (loser.name, )))
+        l_rec = add_records(loser,
+                            Record(loser.name, (min(score), max(score)),
+                                   (0, 1), (winner.name, )))
         return w_rec, l_rec
 
     def calc_team(name: str, rec: Record) -> Team:
         gp = sum(rec.record)
         if gp == 0:
-            return Team(name, 0, 0, 0, rec, 0.0) 
+            return Team(name, 0, 0, 0, rec, 0.0)
         else:
-            return Team(name, rec.record[0] / gp,
-                    rec.points[0]**EXP /
-                    (rec.points[0]**EXP + rec.points[1]**EXP),
-                    operator.sub(*rec.points) / gp, rec, 0.0)
+            return Team(name, rec.record[0] / gp, rec.points[0]**EXP /
+                        (rec.points[0]**EXP + rec.points[1]**EXP),
+                        operator.sub(*rec.points) / gp, rec, 0.0)
 
-    records = {n: Record(name=n, points=(0, 0), record=(0, 0), opponents=())
-               for n in NICKNAMES}  # type: Dict[str, Record]
+    records = {
+        n: Record(name=n, points=(0, 0), record=(0, 0), opponents=())
+        for n in NICKNAMES
+    }  # type: Dict[str, Record]
 
     # print(len(games))
     for game in games:
-        winner, loser = eval_game(
-            game, records[game.away], records[game.home])
+        winner, loser = eval_game(game, records[game.away], records[game.home])
         records[winner.name] = winner
         records[loser.name] = loser
 
@@ -146,7 +145,7 @@ def csv2game(line: str) -> Game:
 
 
 def get_played_games(scores_file: str, start: Week, end: Week) -> List[Game]:
-    games = []
+    games = []  #type: List[Game]
     s_key, e_key = to_sort_key(*start), to_sort_key(*end)
     with open(scores_file, 'r') as fh:
         for game in [csv2game(line) for line in fh.readlines()]:
@@ -163,9 +162,8 @@ def get_played_games(scores_file: str, start: Week, end: Week) -> List[Game]:
     return games
 
 
-def picker(team_stats: Dict[str, Team], spreads_html: str,
-           year: int, week: int) -> List[Guess]:
-
+def picker(team_stats: Dict[str, Team], spreads_html: str, year: int,
+           week: int) -> List[Guess]:
     def pick(away: Team, a_val: float, home: Team, h_val: float) -> Pick:
         if a_val > h_val:
             return Pick(away.name, home.name, abs(a_val - h_val))
@@ -178,9 +176,12 @@ def picker(team_stats: Dict[str, Team], spreads_html: str,
         try:
             p_game = projected_winners[(game.away, game.home)]
         except KeyError:
-            p_game = new_game(year, week, game.away, 0, game.home, 0)
+            p_game = Game(
+                to_sort_key(year, week), year, week, game.away, 0, game.home,
+                0)
         return Guess(
-            away=away, home=home,
+            away=away,
+            home=home,
             pyth=pick(away, away.pyth, home, home.pyth),
             points=pick(away, away.mov, home, home.mov),
             wins=pick(away, away.win_p, home, home.win_p),
@@ -190,12 +191,13 @@ def picker(team_stats: Dict[str, Team], spreads_html: str,
     projected_games = spread_scrape(str(year), str(week), spreads_html)
     guessing_games = score_scrape(year, week, -1).split('\n')
 
-    return [guess(team_stats, game, projected_games) for game in
-            [csv2game(line) for line in guessing_games]]
+    return [
+        guess(team_stats, game, projected_games)
+        for game in [csv2game(line) for line in guessing_games]
+    ]
 
 
 def simple_ranking(stats: Dict[str, Team]) -> Dict[str, Team]:
-
     def adjust(srs: Dict[str, int], sos: Dict[str, int]
                ) -> Tuple[Dict[str, int], Dict[str, int], int]:
         new_srs, delta = {}, 0
@@ -205,8 +207,8 @@ def simple_ranking(stats: Dict[str, Team]) -> Dict[str, Team]:
                 new_srs[team] = 0
                 continue
             prev_sos = sos[team]
-            sos[team] = \
-                int(sum([srs[t] for t in t_stat.record.opponents]) / gp)
+            sos[team] = int(
+                sum([srs[t] for t in t_stat.record.opponents]) / gp)
             delta = max(delta, abs(sos[team] - prev_sos))
             new_srs[team] = true_mov[team] + sos[team]
         return new_srs, sos, delta
@@ -216,8 +218,10 @@ def simple_ranking(stats: Dict[str, Team]) -> Dict[str, Team]:
         team_values[-1] = srs
         return Team(*team_values)  # type: ignore
 
-    true_mov = {team: int(t_stats.mov * SRS_X)
-                for team, t_stats in stats.items()}
+    true_mov = {
+        team: int(t_stats.mov * SRS_X)
+        for team, t_stats in stats.items()
+    }
 
     srs, sos, delta = adjust(true_mov, defaultdict(lambda: 0))
 
@@ -231,7 +235,6 @@ def simple_ranking(stats: Dict[str, Team]) -> Dict[str, Team]:
 
 
 def rank_predictions(guesses: List[Guess]) -> Tuple[PickMap, PickMap]:
-
     def rank(pick_map: PickMap, guesses: List[Guess],
              sel_fn: Callable[[Guess], Pick]) -> None:
         i = len(guesses)
@@ -268,50 +271,74 @@ def rank_predictions(guesses: List[Guess]) -> Tuple[PickMap, PickMap]:
     rank(picks, guesses, lambda x: x.points)
     rank(picks, guesses, lambda x: x.srs)
 
-    return (picks, {x[0]: [Ranked(x[1], x[2], n + 1)]
-                    for n, x in
-                    enumerate(sorted(average_winners, key=lambda k: k[-1]))})
+    return (picks, {
+        x[0]: [Ranked(x[1], x[2], n + 1)]
+        for n, x in enumerate(sorted(average_winners, key=lambda k: k[-1]))
+    })
 
 
-def write_predictions(file_: TextIO,
-                      pick_map: PickMap,
+def write_predictions(file_: TextIO, pick_map: PickMap,
                       averages: PickMap) -> None:
-
     def strings(list_: Sequence[Union[str, int]]) -> List[str]:
         return [str(x) for x in list_]
 
-    print('away,home,winner,me,me_r,'
-          'avg,avg_r,pyth,pyth_r,spread,spread_r,wins,wins_r,'
-          'points,points_r,srs,srs_r,'
-          'avg\u0394,pyth\u0394,spread\u0394,wins\u0394,'
-          'points\u0394,srs\u0394,'
-          'me_act,,pyth_act,,spread_act,,'
-          'wins_act,,points_act,,srs_act,,', file=file_)
+    print(
+        'away,home,winner,me,me_r,'
+        'avg,avg_r,pyth,pyth_r,spread,spread_r,wins,wins_r,'
+        'points,points_r,srs,srs_r,'
+        'avg\u0394,pyth\u0394,spread\u0394,wins\u0394,'
+        'points\u0394,srs\u0394,'
+        'me_act,,pyth_act,,spread_act,,'
+        'wins_act,,points_act,,srs_act,,',
+        file=file_)
 
     for key, val in pick_map.items():
         picks, deltas, ranks = zip(*val)
         a_pix, a_delts, a_ranx = zip(*averages[key])
-        print('{},,x,0,{},{},0,,0,,0,,0,,0,,0,'.format(
-            ','.join(key),
-            ','.join(interleave([strings(a_pix + picks),
-                                 strings(a_ranx + ranks)])),
-            ','.join(strings(a_delts + deltas))),
+        print(
+            '{},,x,0,{},{},0,,0,,0,,0,,0,,0,'.format(','.join(key), ','.join(
+                interleave([strings(a_pix + picks),
+                            strings(a_ranx + ranks)])), ','.join(
+                                strings(a_delts + deltas))),
             file=file_)
 
 
 def spread_scrape(yr: str, wk: str, odds: str) -> Dict[Tuple[str, str], Game]:
     URL = 'https://www.oddsshark.com/nfl/odds'
-    team_map = {'ari': 'cardinals', 'atl': 'falcons', 'bal': 'ravens',
-                'buf': 'bills', 'car': 'panthers', 'chi': 'bears',
-                'cin': 'bengals', 'cle': 'browns', 'dal': 'cowboys',
-                'den': 'broncos', 'det': 'lions', 'gb': 'packers',
-                'hou': 'texans', 'ind': 'colts', 'jac': 'jaguars',
-                'kc': 'chiefs', 'lac': 'chargers', 'lar': 'rams',
-                'min': 'vikings', 'ne': 'patriots', 'no': 'saints',
-                'nyg': 'giants', 'nyj': 'jets', 'oak': 'raiders',
-                'phi': 'eagles', 'pit': 'steelers', 'sea': 'seahawks',
-                'sf': '49ers', 'ten': 'titans', 'was': 'redskins',
-                'mia': 'dolphins', 'tb': 'buccaneers'}
+    team_map = {
+        'ari': 'cardinals',
+        'atl': 'falcons',
+        'bal': 'ravens',
+        'buf': 'bills',
+        'car': 'panthers',
+        'chi': 'bears',
+        'cin': 'bengals',
+        'cle': 'browns',
+        'dal': 'cowboys',
+        'den': 'broncos',
+        'det': 'lions',
+        'gb': 'packers',
+        'hou': 'texans',
+        'ind': 'colts',
+        'jac': 'jaguars',
+        'kc': 'chiefs',
+        'lac': 'chargers',
+        'lar': 'rams',
+        'min': 'vikings',
+        'ne': 'patriots',
+        'no': 'saints',
+        'nyg': 'giants',
+        'nyj': 'jets',
+        'oak': 'raiders',
+        'phi': 'eagles',
+        'pit': 'steelers',
+        'sea': 'seahawks',
+        'sf': '49ers',
+        'ten': 'titans',
+        'was': 'redskins',
+        'mia': 'dolphins',
+        'tb': 'buccaneers'
+    }
 
     def parse_odds_xml(odds_file: str) -> Tuple[List[str], List[Any]]:
         if odds_file:
@@ -320,20 +347,24 @@ def spread_scrape(yr: str, wk: str, odds: str) -> Dict[Tuple[str, str], Game]:
         else:
             p = html.fromstring(requests.get(URL).content)
 
-        teams = [str.lower(json.loads(x.attrib['data-op-name'])['short_name'])
-                 for x in
-                 p.xpath('//div[starts-with(@class, "op-matchup-team")]')]
-        games = p.xpath('//div[@id="op-results"]')[0] \
-                 .xpath('div[starts-with(@class, "op-item-row-wrapper")]')
+        teams = [
+            str.lower(json.loads(x.attrib['data-op-name'])['short_name'])
+            for x in p.xpath('//div[starts-with(@class, "op-matchup-team")]')
+        ]
+        games = p.xpath('//div[@id="op-results"]')[0].xpath(
+            'div[starts-with(@class, "op-item-row-wrapper")]')
         return (teams, games)
 
     def parse_spreads(g: Any) -> List[str]:
-        return [json.loads(x.attrib['data-op-info'])['fullgame'] for x in
-                g.xpath('div/div[starts-with(@class, "op-item op-spread")]')]
+        return [
+            json.loads(x.attrib['data-op-info'])['fullgame'] for x in g.xpath(
+                'div/div[starts-with(@class, "op-item op-spread")]')
+        ]
 
     teams, games = parse_odds_xml(odds)
     matchups = [(team_map[teams[n]], team_map[teams[n + 1]])
-                for n in range(0, len(teams) - 1, 2)]
+                for n in range(0,
+                               len(teams) - 1, 2)]
 
     predictions = {}  # type: Dict[Tuple[str, str], Game]
     n = 0
@@ -342,13 +373,12 @@ def spread_scrape(yr: str, wk: str, odds: str) -> Dict[Tuple[str, str], Game]:
         spreads = [0 if n == 'Ev' or n == '' else float(n) for n in diffs]
         if len(spreads) == 0:
             continue
-        avg_spread = \
-            sum([n for n in islice(spreads, 0, None, 2)]) / (len(spreads) / 2)
-        scores = (abs(avg_spread), 0) if avg_spread < 0 else \
-                 (0, abs(avg_spread))
-        game = new_game(yr, wk,
-                        matchups[n][0], str(scores[0]),
-                        matchups[n][1], str(scores[1]))
+        avg_spread = sum([n for n in islice(spreads, 0, None, 2)]) / (
+            len(spreads) / 2)
+        scores = (abs(avg_spread), 0) if avg_spread < 0 else (0,
+                                                              abs(avg_spread))
+        game = new_game(yr, wk, matchups[n][0], str(scores[0]), matchups[n][1],
+                        str(scores[1]))
         predictions[(game.away, game.home)] = game
         n += 1
 
@@ -365,9 +395,10 @@ def score_scrape(yr: int, wk_from: int, wk_to: int) -> str:
                          '/tbody')
 
     def select_teams(game_xml: Any) -> List[str]:
-        return [x.text.split()[-1]
-                for x in
-                game_xml.xpath('tr/td/a[starts-with(@href, "/teams/")]')]
+        return [
+            x.text.split()[-1]
+            for x in game_xml.xpath('tr/td/a[starts-with(@href, "/teams/")]')
+        ]
 
     def select_scores(game_xml: Any) -> List[str]:
         score = [x.text for x in game_xml.xpath('tr/td[@class="right"]')][0:2]
@@ -380,24 +411,26 @@ def score_scrape(yr: int, wk_from: int, wk_to: int) -> str:
         return html.fromstring(requests.get(URL.format(yr, wk)).content)
 
     def game_csv(yr: int, wk: int, gm: str) -> str:
-        return ','.join(
-            [str(yr), '{0:0>2}'.format(wk)] +
-            list(interleave([select_teams(gm), select_scores(gm)])))
+        return ','.join([str(yr), '{0:0>2}'.format(wk)] + list(
+            interleave([select_teams(gm), select_scores(gm)])))
 
     def scrape_single(yr: int, week: int) -> str:
-        return '\n'.join([str.lower(game_csv(yr, week, game))
-                          for game in select_games(fetch_page_html(yr, week))])
+        return '\n'.join([
+            str.lower(game_csv(yr, week, game))
+            for game in select_games(fetch_page_html(yr, week))
+        ])
 
     def scrape_weeks(yr: int, wk_from: int, wk_to: int) -> str:
         step = 1 if wk_from < wk_to else -1
         ex = futures.ThreadPoolExecutor(max_workers=4)
-        return '\n'.join(sorted(ex.map(
-            scrape_single, repeat(yr),
-            [wk for wk in range(wk_from, wk_to + step, step)]), reverse=True))
+        return '\n'.join(
+            sorted(
+                ex.map(scrape_single, repeat(yr),
+                       [wk for wk in range(wk_from, wk_to + step, step)]),
+                reverse=True))
 
-    return \
-        scrape_single(yr, wk_from) if wk_to == -1 else \
-        scrape_weeks(yr, wk_from, wk_to)
+    return scrape_single(yr, wk_from) if wk_to == -1 else scrape_weeks(
+        yr, wk_from, wk_to)
 
 
 def get_range(r: str, p: str) -> Tuple[Week, Week]:
