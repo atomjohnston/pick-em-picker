@@ -73,6 +73,13 @@ PickMap = Dict[Matchup, List[Ranked]]
 
 EXP = 2.37
 SRS_X = 1000
+NICKNAMES = frozenset(['49ers', 'bears', 'bengals', 'bills', 'broncos',
+                       'browns', 'buccaneers', 'cardinals', 'chargers',
+                       'chiefs', 'colts', 'cowboys', 'dolphins', 'eagles',
+                       'falcons', 'giants', 'jaguars', 'jets', 'lions',
+                       'packers', 'panthers', 'patriots', 'raiders', 'rams',
+                       'ravens', 'redskins', 'saints', 'seahawks', 'steelers',
+                       'texans', 'titans', 'vikings'])
 
 
 def new_game(year: str, week: str, away: str, ascore: str,
@@ -100,10 +107,6 @@ def calculate_team_stats(games: List[Game]) -> Dict[str, Team]:
     def sum_tuples(t1: IntPair, t2: IntPair) -> IntPair:
         return tuple(map(operator.add, t1, t2))
 
-    def get_record(name: str, records: Dict[str, Record]) -> Record:
-        return records[name] if name in records else \
-            Record(name=name, points=(0, 0), record=(0, 0), opponents=())
-
     def eval_game(game: Game, a_rec: Record,
                   h_rec: Record) -> Tuple[Record, Record]:
         winner, loser = (a_rec, h_rec) if game.away_pts > game.home_pts else \
@@ -116,17 +119,20 @@ def calculate_team_stats(games: List[Game]) -> Dict[str, Team]:
         return w_rec, l_rec
 
     def calc_team(name: str, rec: Record) -> Team:
-        return Team(name, rec.record[0] / sum(rec.record),
+        gp = sum(rec.record)
+        if gp == 0:
+            return Team(name, 0, 0, 0, rec, 0.0) 
+        else:
+            return Team(name, rec.record[0] / gp,
                     rec.points[0]**EXP /
                     (rec.points[0]**EXP + rec.points[1]**EXP),
-                    operator.sub(*rec.points) / sum(rec.record), rec, 0.0)
+                    operator.sub(*rec.points) / gp, rec, 0.0)
 
-    records = {}  # type: Dict[str, Record]
+    records = {n: Record(name=n, points=(0, 0), record=(0, 0), opponents=())
+               for n in NICKNAMES}  # type: Dict[str, Record]
 
     # print(len(games))
     for game in games:
-        records[game.away] = get_record(game.away, records)
-        records[game.home] = get_record(game.home, records)
         winner, loser = eval_game(
             game, records[game.away], records[game.home])
         records[winner.name] = winner
@@ -169,7 +175,10 @@ def picker(team_stats: Dict[str, Team], spreads_html: str,
     def guess(stats: Dict[str, Team], game: Game,
               projected_winners: Dict[Matchup, Game]) -> Guess:
         away, home = (stats[game.away], stats[game.home])
-        p_game = projected_winners[(game.away, game.home)]
+        try:
+            p_game = projected_winners[(game.away, game.home)]
+        except KeyError:
+            p_game = new_game(year, week, game.away, 0, game.home, 0)
         return Guess(
             away=away, home=home,
             pyth=pick(away, away.pyth, home, home.pyth),
@@ -191,9 +200,13 @@ def simple_ranking(stats: Dict[str, Team]) -> Dict[str, Team]:
                ) -> Tuple[Dict[str, int], Dict[str, int], int]:
         new_srs, delta = {}, 0
         for team, t_stat in stats.items():
+            gp = sum(t_stat.record.record)
+            if gp == 0:
+                new_srs[team] = 0
+                continue
             prev_sos = sos[team]
-            sos[team] = int(sum([srs[t] for t in t_stat.record.opponents]) /
-                            sum(t_stat.record.record))
+            sos[team] = \
+                int(sum([srs[t] for t in t_stat.record.opponents]) / gp)
             delta = max(delta, abs(sos[team] - prev_sos))
             new_srs[team] = true_mov[team] + sos[team]
         return new_srs, sos, delta
