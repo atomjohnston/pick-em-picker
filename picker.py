@@ -42,7 +42,9 @@ IntPair = Tuple[Any, ...]
 
 Opponents = Tuple[str, ...]
 
-Week = Tuple[int, int]
+Week = NamedTuple('Week', [('year', int), ('week_number', int)])
+
+DateRange = NamedTuple('DateRange', [('begin', Week), ('end', Week)])
 
 Game = NamedTuple('Game', [('sort_key', int), ('year', int), ('week', int),
                            ('away', str), ('away_pts', float), ('home', str),
@@ -429,41 +431,44 @@ def score_scrape(yr: int, wk_from: int, wk_to: int) -> str:
                        [wk for wk in range(wk_from, wk_to + step, step)]),
                 reverse=True))
 
-    return scrape_single(yr, wk_from) if wk_to == -1 else scrape_weeks(
-        yr, wk_from, wk_to)
+    return (scrape_single(yr, wk_from) if wk_to == -1 else
+            scrape_weeks(yr, wk_from, wk_to))
 
 
-def get_range(r: str, p: str) -> Tuple[Week, Week]:
+def get_range(r: str, p: str) -> DateRange:
     try:
         start, end = r.split('-')
-        return year_week(start), year_week(end)
+        return DateRange(year_week(start), year_week(end))
     except:
         y, w = year_week(p)
-        return (y, w), (y, 1)
+        return DateRange((y, w), (y, 1))
 
 
 def year_week(s: str) -> Week:
     yr, wk = s.split(':')
-    return int(yr), int(wk)
+    return Week(int(yr), int(wk))
 
 
 def run(write_fh: TextIO, doc: Any) -> None:
-    range_ = get_range(doc['<date-range>'], doc['<pick-week>'])
-    # print(range_)
+    dates = get_range(doc['<date-range>'], doc['<pick-week>'])
     if doc['get-results']:
-        write_fh.write(score_scrape(range_[0][0], range_[0][1], range_[1][1]))
-    else:
-        games = get_played_games(doc['<records-file>'], range_[0], range_[1])
-        teams = pipe(games, calculate_team_stats, simple_ranking)
-        if doc['make-picks']:
-            pw = year_week(doc['<pick-week>'])
-            predictions = picker(teams, doc['--spread'], pw[0], pw[1])
-            ranks, averages = rank_predictions(predictions)
-            write_predictions(write_fh, ranks, averages)
-        elif doc['simple-ranking']:
-            for t in sorted(teams.values(), key=lambda x: x.srs, reverse=True):
-                # print('{0:12s} {1:6.2f}'.format(t.name, t.srs/SRS_X))
-                print('{0:12s} {1:6}'.format(t.name, t.srs))
+        write_fh.write(score_scrape(dates.begin.year, dates.begin.week_number, dates.end.week_number))
+        return
+
+    print(dates)
+    games = get_played_games(doc['<records-file>'], dates.begin, dates.end)
+    teams = pipe(games, calculate_team_stats, simple_ranking)
+
+    if doc['simple-ranking']:
+        for t in sorted(teams.values(), key=lambda x: x.srs, reverse=True):
+            print('{0:12s} {1:6}'.format(t.name, t.srs))
+        return
+
+    if doc['make-picks']:
+        pw = year_week(doc['<pick-week>'])
+        predictions = picker(teams, doc['--spread'], pw[0], pw[1])
+        ranks, averages = rank_predictions(predictions)
+        write_predictions(write_fh, ranks, averages)
 
 
 def main():
