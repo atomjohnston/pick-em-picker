@@ -32,7 +32,7 @@ from collections import namedtuple, defaultdict
 from concurrent import futures
 from docopt import docopt
 from itertools import repeat, islice, dropwhile, takewhile
-from lxml import html  # type: ignore
+from bs4 import BeautifulSoup  # type: ignore
 from toolz import interleave, frequencies, pipe
 from typing import (NamedTuple, Tuple, TextIO, Any, List, Dict, Callable,
                     Sequence, Union)
@@ -345,28 +345,22 @@ def spread_scrape(yr: str, wk: str, odds: str) -> Dict[Tuple[str, str], Game]:
     def parse_odds_xml(odds_file: str) -> Tuple[List[str], List[Any]]:
         if odds_file:
             with open(odds_file, 'r') as f:
-                p = html.fromstring(f.read())
+                soup = BeautifulSoup(f.read())
         else:
-            p = html.fromstring(requests.get(URL).content)
+            soup = BeautifulSoup(requests.get(URL).content, 'lxml')
 
         teams = [
-            str.lower(json.loads(x.attrib['data-op-name'])['short_name'])
-            for x in p.xpath('//div[starts-with(@class, "op-matchup-team")]')
+            str.lower(json.loads(x['data-op-name'])['short_name'])
+            for x in soup.find_all('div', class_='op-matchup-team')
         ]
-        games = p.xpath('//div[@id="op-results"]')[0].xpath(
-            'div[starts-with(@class, "op-item-row-wrapper")]')
+        games = soup.find(id='op-results').find_all('div', class_='op-item-row-wrapper')
         return (teams, games)
 
     def parse_spreads(g: Any) -> List[str]:
-        return [
-            json.loads(x.attrib['data-op-info'])['fullgame'] for x in g.xpath(
-                'div/div[starts-with(@class, "op-item op-spread")]')
-        ]
+        return [json.loads(x['data-op-info'])['fullgame'] for x in g.find_all('div', class_='op-spread')]
 
     teams, games = parse_odds_xml(odds)
-    matchups = [(team_map[teams[n]], team_map[teams[n + 1]])
-                for n in range(0,
-                               len(teams) - 1, 2)]
+    matchups = [(team_map[teams[n]], team_map[teams[n + 1]]) for n in range(0, len(teams) - 1, 2)]
 
     predictions = {}  # type: Dict[Tuple[str, str], Game]
     n = 0
@@ -377,10 +371,8 @@ def spread_scrape(yr: str, wk: str, odds: str) -> Dict[Tuple[str, str], Game]:
             continue
         avg_spread = sum([n for n in islice(spreads, 0, None, 2)]) / (
             len(spreads) / 2)
-        scores = (abs(avg_spread), 0) if avg_spread < 0 else (0,
-                                                              abs(avg_spread))
-        game = new_game(yr, wk, matchups[n][0], str(scores[0]), matchups[n][1],
-                        str(scores[1]))
+        scores = (abs(avg_spread), 0) if avg_spread < 0 else (0, abs(avg_spread))
+        game = new_game(yr, wk, matchups[n][0], str(scores[0]), matchups[n][1], str(scores[1]))
         predictions[(game.away, game.home)] = game
         n += 1
 
@@ -391,26 +383,21 @@ def score_scrape(yr: int, wk_from: int, wk_to: int) -> str:
 
     URL = 'https://www.pro-football-reference.com/years/{}/week_{}.htm'
 
-    def select_games(xml: Any) -> Any:
-        return xml.xpath('//div[starts-with(@class,"game_summary")]'
-                         '/table[@class="teams"]'
-                         '/tbody')
+    def select_games(soup: Any) -> Any:
+        return [x.find('tbody') for x in soup.find_all('div', class_='game_summary')]
 
-    def select_teams(game_xml: Any) -> List[str]:
-        return [
-            x.text.split()[-1]
-            for x in game_xml.xpath('tr/td/a[starts-with(@href, "/teams/")]')
-        ]
+    def select_teams(game: Any) -> List[str]:
+        return [x.text.split()[-1] for x in game.find_all('a', href=lambda h: h.startswith('/teams'))]
 
-    def select_scores(game_xml: Any) -> List[str]:
-        score = [x.text for x in game_xml.xpath('tr/td[@class="right"]')][0:2]
-        if not score[0] or not score[1]:
+    def select_scores(game: Any) -> List[str]:
+        selection = [x.text for x in game.find_all('td', class_='right')]
+        if len(selection) < 4:
             return ['-1', '-1']
         else:
-            return score
+            return [selection[0], selection[2]]
 
     def fetch_page_html(yr: int, wk: int) -> Any:
-        return html.fromstring(requests.get(URL.format(yr, wk)).content)
+        return BeautifulSoup(requests.get(URL.format(yr, wk)).content, 'lxml')
 
     def game_csv(yr: int, wk: int, gm: str) -> str:
         return ','.join([str(yr), '{0:0>2}'.format(wk)] + list(
