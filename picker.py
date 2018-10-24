@@ -370,7 +370,7 @@ def spread_scrape(yr: str, wk: str, odds: str) -> Dict[Tuple[str, str], Game]:
     n = 0
     for g in games:
         diffs = parse_spreads(g)
-        spreads = [0 if n == 'Ev' or n == '' else float(n) for n in diffs]
+        spreads = [0 if n == 'Ev' else float(n) for n in diffs if not n == '']
         if len(spreads) == 0:
             continue
         avg_spread = sum([n for n in islice(spreads, 0, None, 2)]) / (
