@@ -37,16 +37,17 @@ from itertools import takewhile, repeat
 
 from docopt import docopt
 from lxml import html
-from toolz import compose, curry, flip, interleave, pipe
+from toolz import compose, concat, curry, flip, interleave, pipe
 from toolz.curried import map
 
 
-Game = namedtuple('Game', 'key year week away_team away_points home_team home_points')
+Scored = namedtuple('Scored', 'team points')
+Game = namedtuple('Game', 'away home key year week ')
 Record = namedtuple('Record', 'team opponents games wins losses ties points_for points_against')
-Stats = namedtuple('Stats', 'team win_per points_per against_per point_delta margin_of_victory strength_of_schedule simple_ranking pythagorean')
+Stats = namedtuple('Stats', 'team win_rate points_per against_per point_delta margin_of_victory strength_of_schedule simple_ranking pythagorean')
 Summary = namedtuple('Summary', 'team record stats')
-Pick = namedtuple('Pick', 'delta winner rank')
-Picks = namedtuple('Picks', 'point_spread simple_ranking pythagorean margin_of_victory wins')
+Pick = namedtuple('Pick', 'winner rank delta')
+Picks = namedtuple('Picks', 'point_spread simple_ranking simple_ranking_1 pythagorean margin_of_victory wins')
 
 NICKNAMES = frozenset([
     '49ers', 'bears', 'bengals', 'bills', 'broncos', 'browns', 'buccaneers',
@@ -75,13 +76,13 @@ def win_loss_tie(pf, pa):
             (0, 1, 0))
 
 
-def add_stats(stats, team, opponent, pf, pa):
-    return stats + TeamRecord(team, opponent, 1, *win_loss_tie(pf, pa), pf, pa)
+def add_stats(stats, team, opponent):
+    return stats + TeamRecord(team.team, opponent.team, 1, *win_loss_tie(team.points, opponent.points), team.points, opponent.points)
 
 
 def append_game(table, game):
-    table[game.away_team] = add_stats(table[game.away_team], game.away_team, game.home_team, game.away_points, game.home_points)
-    table[game.home_team] = add_stats(table[game.home_team], game.home_team, game.away_team, game.home_points, game.away_points)
+    table[game.away.team] = add_stats(table[game.away.team], game.away, game.home)
+    table[game.home.team] = add_stats(table[game.home.team], game.home, game.away)
     return table
 
 
@@ -89,7 +90,9 @@ def dict2game(src):
     src.update({k: int(v) for (k, v) in src.items()
                           if not k.endswith('team')})
     src['key'] = src['year'] * 100 + src['week']
-    return Game(**src)
+    away = Scored(src.pop('away_team'), src.pop('away_points'))
+    home = Scored(src.pop('home_team'), src.pop('home_points'))
+    return Game(away, home, **src)
 
 
 def calc(record):
@@ -136,13 +139,13 @@ def simplify(summary):
 def write_summary(file_, team_summary):
     outcsv = csv.DictWriter(file_, fieldnames=['team', 'w', 'l', 't', 'w%', 'pf', 'pf/g', 'pa', 'pa/g', 'pd', 'mov', 'sos', 'srs', 'pyth'])
     outcsv.writeheader()
-    for summary in sorted(team_summary.values(), key=lambda x: x.stats.win_per, reverse=True):
+    for summary in sorted(team_summary.values(), key=lambda x: x.stats.win_rate, reverse=True):
         outcsv.writerow({
             'team': summary.record.team,
             'w': summary.record.wins,
             'l': summary.record.losses,
             't': summary.record.ties,
-            'w%': summary.stats.win_per,
+            'w%': summary.stats.win_rate,
             'pf': summary.record.points_for,
             'pf/g': summary.stats.points_per, 
             'pa': summary.record.points_against,
@@ -153,6 +156,27 @@ def write_summary(file_, team_summary):
             'srs': summary.stats.simple_ranking,
             'pyth': summary.stats.pythagorean,
         })
+
+
+def write_predictions(file_, predictions):
+    outcsv = csv.writer(sys.stdout)
+    outcsv.writerow([
+        'spread', 'spread_r', 'spread_d',
+        'srs', 'srs_r', 'srs_d',
+        'srs1', 'srs1_r', 'srs1_d',
+        'pyth', 'pyth_r', 'pyth_d',
+        'mov', 'mov_r', 'mov_d',
+        'w%', 'w%_r', 'w%_d',
+    ])
+    for picks in sorted(predictions, key=lambda x: x.simple_ranking.rank, reverse=True):
+        outcsv.writerow(concat([
+            picks.point_spread,
+            picks.simple_ranking,
+            picks.simple_ranking_1,
+            picks.pythagorean,
+            picks.margin_of_victory,
+            picks.wins,
+        ]))
 
 
 def read_records(year, records):
@@ -174,35 +198,40 @@ def predict_winners(team_summary, games):
     # pylint: disable=E1120,E1102
 
     def stats_for(team):
-        return team_summary[team].stats
+        return team_summary[team.team].stats
 
     @curry
-    def predict(game, sel, round_to=2):
-        delta = sel(stats_for(game.home_team)) - sel(stats_for(game.away_team))
-        return Pick(round(delta, round_to), (game.home_team if delta >= 0 else game.away_team), 0)
+    def predict(home, away, n_home, n_away, round_f=round2):
+        delta = n_home - n_away
+        return Pick((home if delta >= 0 else away), 0, round_f(delta))
 
-    def predict_all(game):
-        pick = predict(game)
-        return Picks(
-            point_spread=pick(lambda x: 0),
-            simple_ranking=pick(lambda x: x.simple_ranking),
-            pythagorean=pick(lambda x: x.pythagorean, 3),
-            margin_of_victory=pick(lambda x: x.margin_of_victory),
-            wins=pick(lambda x: x.win_per, 3),
+    def predict_all(h_stats, a_stats):
+        pick = predict(h_stats.team, a_stats.team)
+        return dict(
+            point_spread=pick(0, 0),
+            simple_ranking=pick(h_stats.simple_ranking, a_stats.simple_ranking),
+            simple_ranking_1=pick(h_stats.simple_ranking + 2, a_stats.simple_ranking),
+            pythagorean=pick(h_stats.pythagorean, a_stats.pythagorean, round3),
+            margin_of_victory=pick(h_stats.margin_of_victory, a_stats.margin_of_victory),
+            wins=pick(h_stats.win_rate, a_stats.win_rate, round3),
         )
 
+    @curry
     def rank(key, predictions):
-        # x._replace(simple_ranking=x.simple_ranking._replace(rank=n))
-        return [key(x)._replace(rank=n) for (n, x) in enumerate(sorted(predictions, key=compose(abs, lambda x: x.delta, key)), start=1)]
+        for (n, pick) in enumerate(sorted(predictions, key=lambda x: abs(x[key].delta)), start=1):
+            pick[key] = pick[key]._replace(rank=n)
+        return predictions
 
-    rank = curry(rank)
-    return pipe([predict_all(game) for game in games],
-                    rank(lambda x: x.simple_ranking),
-                    rank(lambda x: x.point_spread),
-                    rank(lambda x: x.pythagorean),
-                    rank(lambda x: x.margin_of_victory),
-                    rank(lambda x: x.wins),
-    )
+    ranked = pipe(
+        [predict_all(stats_for(game.home), stats_for(game.away)) for game in games],
+            rank('simple_ranking'),
+            rank('simple_ranking_1'),
+            rank('point_spread'),
+            rank('pythagorean'),
+            rank('margin_of_victory'),
+            rank('wins'),
+        )
+    return [Picks(**picks) for picks in ranked]
 
 
 def score_scrape(yr, wk_from, wk_to=None):
@@ -221,7 +250,7 @@ def score_scrape(yr, wk_from, wk_to=None):
         parser = compose(map(parse_game), select_games)
         game_info = parser(html.fromstring(requests.get(URL.format(yr, week)).content))
         for (away, home) in game_info:
-            yield Game(yr * 100 + week, yr, week, *away, *home)
+            yield Game(Scored(*away), Scored(*home), yr * 100 + week, yr, week)
 
     def scrape_weeks(yr, wk_from, wk_to):
         step = 1 if wk_from < wk_to else -1
@@ -237,7 +266,7 @@ def run(outfile, opts):
         team_summary = pipe(records, curry(get_team_stats)('2018'),
                                      simplify)
     predictions = predict_winners(team_summary, score_scrape(2018, 9))
-    print(predictions)
+    write_predictions(None, predictions)
     write_summary(outfile, team_summary)
 
 
