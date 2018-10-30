@@ -28,17 +28,25 @@ import operator
 import statistics
 import sys
 
+import requests
+
 from collections import namedtuple
-from docopt import docopt
+from concurrent import futures
 from functools import reduce
 from itertools import takewhile, repeat
-from toolz import compose, curry, flip, pipe
+
+from docopt import docopt
+from lxml import html
+from toolz import compose, curry, flip, interleave, pipe
 from toolz.curried import map
+
 
 Game = namedtuple('Game', 'key year week away_team away_points home_team home_points')
 Record = namedtuple('Record', 'team opponents games wins losses ties points_for points_against')
-Stats = namedtuple('Stats', 'team win_per points_per against_per point_delta margin_of_victory strength_of_schedule simple_ranking')
+Stats = namedtuple('Stats', 'team win_per points_per against_per point_delta margin_of_victory strength_of_schedule simple_ranking pythagorean')
 Summary = namedtuple('Summary', 'team record stats')
+Pick = namedtuple('Pick', 'delta winner rank')
+Picks = namedtuple('Picks', 'point_spread simple_ranking pythagorean margin_of_victory wins')
 
 NICKNAMES = frozenset([
     '49ers', 'bears', 'bengals', 'bills', 'broncos', 'browns', 'buccaneers',
@@ -49,7 +57,8 @@ NICKNAMES = frozenset([
 ])
 
 
-round2 = flip(round, 2)  #pylint: disable=E1120
+round2 = flip(round, 2)  # pylint: disable=E1120
+round3 = flip(round, 3)  # pylint: disable=E1120
 
 class TeamRecord(Record):
     def __add__(self, other):
@@ -88,13 +97,14 @@ def calc(record):
     mov = round2(delta/record.games)
     return Stats(
         record.team,
-        round(record.wins/record.games, 3),
+        round3(record.wins/record.games),
         round2(record.points_for/record.games),
         round2(record.points_against/record.games),
         delta,
         mov,
         0,
-        mov
+        mov,
+        round3((record.points_for**2.37)/((record.points_for**2.37)+(record.points_against**2.37)))
     )
 
 
@@ -111,36 +121,38 @@ def simplify(summary):
                 strength_of_schedule=sos,
                 simple_ranking=round2(t_sum.stats.margin_of_victory + sos)))
     
-    def diff_sos(tup_arg):
-        previous, current = tup_arg
-        return abs(current.stats.strength_of_schedule - previous.stats.strength_of_schedule)
-
-    c_max = curry(max)
+    calc_drift = compose(round2, curry(max))
     def calculate_all(previous):
         adjustments = {name: adjust(previous, smry) for (name, smry) in previous.items()}
-        drift = pipe(zip(previous.values(), adjustments.values()), map(diff_sos), c_max, round2)
+        drift = calc_drift([
+            abs(current.stats.strength_of_schedule - previous.stats.strength_of_schedule)
+            for (previous, current) in zip(previous.values(), adjustments.values())])
         return (adjustments if drift <= 0.01 else
-                calculate_all(adjustments.copy()))
+                calculate_all(adjustments))
 
     return calculate_all(summary)
-        
 
-def format(record, stats):
-    return {
-        'team': record.team,
-        'w': record.wins,
-        'l': record.losses,
-        't': record.ties,
-        'w%': stats.win_per,
-        'pf': record.points_for,
-        'pf/g': stats.points_per, 
-        'pa': record.points_against,
-        'pa/g': stats.against_per,
-        'pd': stats.point_delta,
-        'mov': stats.margin_of_victory,
-        'sos': stats.strength_of_schedule,
-        'srs': stats.simple_ranking
-    }
+
+def write_summary(file_, team_summary):
+    outcsv = csv.DictWriter(file_, fieldnames=['team', 'w', 'l', 't', 'w%', 'pf', 'pf/g', 'pa', 'pa/g', 'pd', 'mov', 'sos', 'srs', 'pyth'])
+    outcsv.writeheader()
+    for summary in sorted(team_summary.values(), key=lambda x: x.stats.win_per, reverse=True):
+        outcsv.writerow({
+            'team': summary.record.team,
+            'w': summary.record.wins,
+            'l': summary.record.losses,
+            't': summary.record.ties,
+            'w%': summary.stats.win_per,
+            'pf': summary.record.points_for,
+            'pf/g': summary.stats.points_per, 
+            'pa': summary.record.points_against,
+            'pa/g': summary.stats.against_per,
+            'pd': summary.stats.point_delta,
+            'mov': summary.stats.margin_of_victory,
+            'sos': summary.stats.strength_of_schedule,
+            'srs': summary.stats.simple_ranking,
+            'pyth': summary.stats.pythagorean,
+        })
 
 
 def read_records(year, records):
@@ -158,13 +170,75 @@ def get_team_stats(season, records):
     return {r.team: Summary(r.team, r, calc(r)) for r in records.values()}
 
 
+def predict_winners(team_summary, games):
+    # pylint: disable=E1120,E1102
+
+    def stats_for(team):
+        return team_summary[team].stats
+
+    @curry
+    def predict(game, sel, round_to=2):
+        delta = sel(stats_for(game.home_team)) - sel(stats_for(game.away_team))
+        return Pick(round(delta, round_to), (game.home_team if delta >= 0 else game.away_team), 0)
+
+    def predict_all(game):
+        pick = predict(game)
+        return Picks(
+            point_spread=pick(lambda x: 0),
+            simple_ranking=pick(lambda x: x.simple_ranking),
+            pythagorean=pick(lambda x: x.pythagorean, 3),
+            margin_of_victory=pick(lambda x: x.margin_of_victory),
+            wins=pick(lambda x: x.win_per, 3),
+        )
+
+    def rank(key, predictions):
+        # x._replace(simple_ranking=x.simple_ranking._replace(rank=n))
+        return [key(x)._replace(rank=n) for (n, x) in enumerate(sorted(predictions, key=compose(abs, lambda x: x.delta, key)), start=1)]
+
+    rank = curry(rank)
+    return pipe([predict_all(game) for game in games],
+                    rank(lambda x: x.simple_ranking),
+                    rank(lambda x: x.point_spread),
+                    rank(lambda x: x.pythagorean),
+                    rank(lambda x: x.margin_of_victory),
+                    rank(lambda x: x.wins),
+    )
+
+
+def score_scrape(yr, wk_from, wk_to=None):
+    URL = 'https://www.pro-football-reference.com/years/{}/week_{}.htm'
+
+    def select_games(week_xml):
+        return week_xml.xpath(
+            '//div[starts-with(@class,"game_summary")]/table[@class="teams"]/tbody')
+
+    def parse_game(game_xml):
+        teams = [x.text.split()[-1].lower() for x in game_xml.xpath('tr/td/a[starts-with(@href, "/teams/")]')]
+        scores = [x.text if x.text else -1 for x in game_xml.xpath('tr/td[@class="right"]')][0:2]
+        return zip(teams, [int(scores[0]), int(scores[1])])
+
+    def scrape_week(yr, week):
+        parser = compose(map(parse_game), select_games)
+        game_info = parser(html.fromstring(requests.get(URL.format(yr, week)).content))
+        for (away, home) in game_info:
+            yield Game(yr * 100 + week, yr, week, *away, *home)
+
+    def scrape_weeks(yr, wk_from, wk_to):
+        step = 1 if wk_from < wk_to else -1
+        ex = futures.ThreadPoolExecutor(max_workers=4)
+        return sorted(ex.map(scrape_week, repeat(yr), [wk for wk in range(wk_from, wk_to + step, step)]), reverse=True)
+
+    #return scrape_weeks(yr, wk_from, wk_to if wk_to else wk_from)
+    return scrape_week(yr, wk_from)
+
+
 def run(outfile, opts):
     with open(opts['<records-file>'], 'r') as records:
-        table = simplify(get_team_stats('2018', records))
-    outcsv = csv.DictWriter(outfile, fieldnames=['team', 'w', 'l', 't', 'w%', 'pf', 'pf/g', 'pa', 'pa/g', 'pd', 'mov', 'sos', 'srs'])
-    outcsv.writeheader()
-    for summary in sorted(table.values(), key=lambda x: x.stats.win_per, reverse=True):
-        outcsv.writerow(format(summary.record, summary.stats))
+        team_summary = pipe(records, curry(get_team_stats)('2018'),
+                                     simplify)
+    predictions = predict_winners(team_summary, score_scrape(2018, 9))
+    print(predictions)
+    write_summary(outfile, team_summary)
 
 
 def main():
