@@ -24,6 +24,7 @@ Options:
 """
 
 import csv
+import json
 import operator
 import statistics
 import sys
@@ -33,29 +34,35 @@ import requests
 from collections import namedtuple
 from concurrent import futures
 from functools import reduce
-from itertools import takewhile, repeat
+from itertools import islice, repeat, takewhile
 
 from docopt import docopt
 from lxml import html
 from toolz import compose, concat, curry, flip, interleave, pipe
-from toolz.curried import map
+from toolz.curried import filter, map, partition
 
 
 Scored = namedtuple('Scored', 'team points')
-Game = namedtuple('Game', 'away home key year week ')
+Game = namedtuple('Game', 'away home year week ')
 Record = namedtuple('Record', 'team opponents games wins losses ties points_for points_against')
 Stats = namedtuple('Stats', 'team win_rate points_per against_per point_delta margin_of_victory strength_of_schedule simple_ranking pythagorean')
 Summary = namedtuple('Summary', 'team record stats')
 Pick = namedtuple('Pick', 'winner rank delta')
 Picks = namedtuple('Picks', 'point_spread simple_ranking simple_ranking_1 pythagorean margin_of_victory wins')
 
-NICKNAMES = frozenset([
-    '49ers', 'bears', 'bengals', 'bills', 'broncos', 'browns', 'buccaneers',
-    'cardinals', 'chargers', 'chiefs', 'colts', 'cowboys', 'dolphins',
-    'eagles', 'falcons', 'giants', 'jaguars', 'jets', 'lions', 'packers',
-    'panthers', 'patriots', 'raiders', 'rams', 'ravens', 'redskins', 'saints',
-    'seahawks', 'steelers', 'texans', 'titans', 'vikings'
-])
+TEAM_MAP = {
+    'ari': 'cardinals', 'atl': 'falcons',  'bal': 'ravens',
+    'buf': 'bills',     'car': 'panthers', 'chi': 'bears',
+    'cin': 'bengals',   'cle': 'browns',   'dal': 'cowboys',
+    'den': 'broncos',   'det': 'lions',    'gb': 'packers',
+    'hou': 'texans',    'ind': 'colts',    'jac': 'jaguars',
+    'kc': 'chiefs',     'lac': 'chargers', 'lar': 'rams',
+    'min': 'vikings',   'ne': 'patriots',  'no': 'saints',
+    'nyg': 'giants',    'nyj': 'jets',     'oak': 'raiders',
+    'phi': 'eagles',    'pit': 'steelers', 'sea': 'seahawks',
+    'sf': '49ers',      'ten': 'titans',   'was': 'redskins',
+    'mia': 'dolphins',  'tb': 'buccaneers'
+}
 
 
 round2 = flip(round, 2)  # pylint: disable=E1120
@@ -89,7 +96,6 @@ def append_game(table, game):
 def dict2game(src):
     src.update({k: int(v) for (k, v) in src.items()
                           if not k.endswith('team')})
-    src['key'] = src['year'] * 100 + src['week']
     away = Scored(src.pop('away_team'), src.pop('away_points'))
     home = Scored(src.pop('home_team'), src.pop('home_points'))
     return Game(away, home, **src)
@@ -173,7 +179,7 @@ def read_records(year, records):
 
 
 def init_teams():
-    return {team: TeamRecord(team, (), *list(repeat(0, 6))) for team in NICKNAMES}
+    return {team: TeamRecord(team, (), *list(repeat(0, 6))) for team in TEAM_MAP.values()}
 
 
 def get_team_stats(season, records):
@@ -183,26 +189,27 @@ def get_team_stats(season, records):
     return {r.team: Summary(r.team, r, calc(r)) for r in records.values()}
 
 
-def predict_winners(team_summary, games):
+def predict_winners(team_summary, games, spreads):
     # pylint: disable=E1120,E1102
 
     def stats_for(team):
         return team_summary[team.team].stats
 
     @curry
-    def predict(home, away, n_home, n_away, round_f=round2):
+    def predict(away, home, n_away, n_home, round_f=round2):
         delta = n_home - n_away
         return Pick((home if delta >= 0 else away), 0, round_f(delta))
 
-    def predict_all(h_stats, a_stats):
-        pick = predict(h_stats.team, a_stats.team)
+    def predict_all(a_stats, h_stats):
+        pick = predict(a_stats.team, h_stats.team)
+        point_spread = spreads[(a_stats.team, h_stats.team)]
         return dict(
-            point_spread=pick(0, 0),
-            simple_ranking=pick(h_stats.simple_ranking, a_stats.simple_ranking),
-            simple_ranking_1=pick(h_stats.simple_ranking + 2, a_stats.simple_ranking),
-            pythagorean=pick(h_stats.pythagorean, a_stats.pythagorean, round3),
-            margin_of_victory=pick(h_stats.margin_of_victory, a_stats.margin_of_victory),
-            wins=pick(h_stats.win_rate, a_stats.win_rate, round3),
+            point_spread=pick(point_spread.away.points, point_spread.home.points),
+            simple_ranking=pick(a_stats.simple_ranking, h_stats.simple_ranking),
+            simple_ranking_1=pick(a_stats.simple_ranking, h_stats.simple_ranking + 2),
+            pythagorean=pick(a_stats.pythagorean, h_stats.pythagorean, round3),
+            margin_of_victory=pick(a_stats.margin_of_victory, h_stats.margin_of_victory),
+            wins=pick(a_stats.win_rate, h_stats.win_rate, round3),
         )
 
     @curry
@@ -212,7 +219,7 @@ def predict_winners(team_summary, games):
         return predictions
 
     ranked = pipe(
-        [predict_all(stats_for(game.home), stats_for(game.away)) for game in games],
+        [predict_all(stats_for(game.away), stats_for(game.home)) for game in games],
             rank('simple_ranking'),
             rank('simple_ranking_1'),
             rank('point_spread'),
@@ -222,6 +229,8 @@ def predict_winners(team_summary, games):
         )
     return [Picks(**picks) for picks in ranked]
 
+
+get_html_from_url = compose(html.fromstring, lambda x: x.content, requests.get)
 
 def score_scrape(yr, wk_from, wk_to=None):
     URL = 'https://www.pro-football-reference.com/years/{}/week_{}.htm'
@@ -236,9 +245,9 @@ def score_scrape(yr, wk_from, wk_to=None):
         return zip(teams, [int(scores[0]), int(scores[1])])
 
     def scrape_week(yr, week):
-        parse = compose(map(parse_game), select_games, html.fromstring)
-        game_info = parse(requests.get(URL.format(yr, week)).content)
-        return [Game(Scored(*away), Scored(*home), yr * 100 + week, yr, week)
+        parse = compose(map(parse_game), select_games, get_html_from_url)
+        game_info = parse(URL.format(yr, week))
+        return [Game(Scored(*away), Scored(*home), int(yr), int(week))
                 for (away, home) in game_info]
 
     def scrape_weeks(yr, wk_from, wk_to):
@@ -250,11 +259,48 @@ def score_scrape(yr, wk_from, wk_to=None):
     return scrape_week(yr, wk_from)
 
 
+def spread_scrape(yr, wk, odds=None):
+    def get_odds_html(odds_file):
+        if not odds_file:
+            return get_html_from_url('https://www.oddsshark.com/nfl/odds')
+
+        with open(odds_file, 'r') as f:
+            return html.fromstring(f.read())
+
+    def parse_spreads(g):
+        return [json.loads(x.attrib['data-op-info'])['fullgame']
+                for x in g.xpath('div/div[starts-with(@class, "op-item op-spread")]')]
+
+    def convert_spreads(diffs):
+        return [0 if n == 'Ev' else float(n) for n in diffs if not n == '']
+
+    lookup_nickname = map(lambda x: (TEAM_MAP[x[0]], TEAM_MAP[x[1]]))
+    matchups = compose(lookup_nickname, partition(2))
+    away_spreads = map(compose(list, lambda s: islice(s, 0, None, 2)))
+    get_spreads = map(compose(convert_spreads, parse_spreads))
+    calc_spreads = compose(list, map(statistics.mean), away_spreads, filter(lambda x: len(x) > 0), get_spreads)
+
+    def parse_odds_xml(p):
+        team_names = [str.lower(json.loads(x.attrib['data-op-name'])['short_name'])
+                 for x in p.xpath('//div[starts-with(@class, "op-matchup-team")]')]
+        games = p.xpath('//div[@id="op-results"]')[0].xpath('div[starts-with(@class, "op-item-row-wrapper")]')
+        return zip(matchups(team_names), calc_spreads(games))
+
+    def spread2score(compare, spread):
+        return round2(abs(spread) if compare(spread, 0) else 0)
+
+    result = compose(list, parse_odds_xml, get_odds_html)(odds)
+    return {
+        teams: Game(Scored(teams[0], spread2score(operator.lt, spread)), Scored(teams[1], spread2score(operator.ge, spread)), int(yr), int(wk))
+        for (teams, spread) in result
+    }
+
+
 def run(outfile, opts):
     with open(opts['<records-file>'], 'r') as records:
         team_summary = pipe(records, curry(get_team_stats)('2018'),
                                      simplify)
-    predictions = predict_winners(team_summary, score_scrape(2018, 9))
+    predictions = predict_winners(team_summary, score_scrape(2018, 9), spread_scrape(2018, 9))
     write_predictions(None, predictions)
     write_summary(outfile, team_summary)
 
