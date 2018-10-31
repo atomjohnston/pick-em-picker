@@ -3,27 +3,21 @@
 
 
 Usage:
-  pick-em get-results <date-range> [--output CSV]
-  pick-em simple-ranking <records-file> <pick-week> [<date-range>]
+  pick-em get-results <start> [<end>] [--output=CSV ]
+  pick-em standings <records-file> [<start> <end>] [--output=CSV ]
   pick-em make-picks <records-file> <pick-week>
-                     [<date-range>] [--output CSV] [--spread HTML]
-
-Arguments:
-  pick-week     year:week i.e. 2017:07
-  date-range    date range like 2017:01-2017:07 (inclusive)
-  records-file  CSV containing game results
-  CSV           file to write CSV output (default: STDOUT)
-  HTML          HTML file containing OddsShark NFL spread page
+                     [<start> <end>] [--spread=HTML] [--output=CSV ]
 
 Options:
-  -o --output CSV    output to CSV file, instead of default STDOUT
-  -s --spread HTML   HTML file of OddsShark odds page
-  -h --help          display this help
+  -o CSV  --output=CSV    output to CSV file, instead of default STDOUT
+  -s HTML --spread=HTML   HTML file of OddsShark odds page
+  -h --help                display this help
 
 
 """
 
 import csv
+import datetime
 import json
 import operator
 import statistics
@@ -42,6 +36,7 @@ from toolz import compose, concat, curry, flip, interleave, pipe
 from toolz.curried import filter, first, map, partition
 
 
+Week = namedtuple('Week', 'year week')
 Scored = namedtuple('Scored', 'team points')
 Game = namedtuple('Game', 'away home year week ')
 Record = namedtuple('Record', 'team opponents games wins losses ties points_for points_against')
@@ -153,8 +148,18 @@ def write_summary(file_, team_summary):
         outcsv.writerow(concat([record.values(), stats.values()]))
 
 
+def write_game_results(file_, results):
+    outcsv = csv.writer(file_)
+    outcsv.writerow(['year', 'week', 'away_team', 'away_points', 'home_team', 'home_points'])
+    for game in results:
+        outcsv.writerow([
+            game.year, game.week,
+            game.away.team, game.away.points,
+            game.home.team, game.home.points
+        ])
+
 def write_predictions(file_, predictions):
-    outcsv = csv.writer(sys.stdout)
+    outcsv = csv.writer(file_)
     outcsv.writerow([
         'spread', 'spread_r', 'spread_d',
         'srs', 'srs_r', 'srs_d',
@@ -174,8 +179,8 @@ def write_predictions(file_, predictions):
         ]))
 
 
-def read_records(year, records):
-    return takewhile(lambda row: row['year'] == year, csv.DictReader(records))
+def read_records(years, records):
+    return takewhile(lambda row: int(row['year']) in years, csv.DictReader(records))
 
 
 def init_teams():
@@ -294,22 +299,44 @@ def spread_scrape(yr, wk, odds=None):
     }
 
 
-def run(outfile, opts):
+def run(opts, write_fh):
+    start_date = parse_date(opts['<start>'])
+    end_date = (parse_date(opts['<end>']) if opts['<end>'] else
+                start_date)
+
+    if opts['get-results']:
+        write_game_results(write_fh, first(score_scrape(start_date.year, start_date.week, end_date.week)))
+        return
+
+    standings = compose(simplify, curry(get_team_stats)((start_date.year, end_date.year)))
+
     with open(opts['<records-file>'], 'r') as records:
-        team_summary = pipe(records, curry(get_team_stats)('2018'),
-                                     simplify)
-    predictions = predict_winners(team_summary, first(score_scrape(2018, 9)), spread_scrape(2018, 9))
-    write_predictions(None, predictions)
-    write_summary(outfile, team_summary)
+        if opts['standings']:
+            write_summary(write_fh, standings(records))
+            return
+
+        pick_week = parse_date(opts['<pick-week>'])
+        predictions = predict_winners(
+            standings(records), first(score_scrape(*pick_week)), spread_scrape(*pick_week))
+        write_predictions(write_fh, predictions)
+
+
+def parse_date(date):
+    try:
+        x = ''.join([c for c in date if c.isdigit()])
+        return Week(int(x[:4]), int(x[4:]))
+    except:
+        return Week(datetime.datetime.now().year, 0)
 
 
 def main():
-    doc = docopt(__doc__)
-    write_fh = open(doc['--output'], 'w') if doc['--output'] else sys.stdout
+    opts = docopt(__doc__)
+    write_fh = open(opts['--output'], 'w') if opts['--output'] else sys.stdout
     try:
-        run(write_fh, doc)
+        run(opts, write_fh)
     finally:
-        write_fh.close()
+        if not write_fh == sys.stdout:
+            write_fh.close()
 
 
 if __name__ == '__main__':
