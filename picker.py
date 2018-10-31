@@ -137,25 +137,14 @@ def simplify(summary):
 
 
 def write_summary(file_, team_summary):
-    outcsv = csv.DictWriter(file_, fieldnames=['team', 'w', 'l', 't', 'w%', 'pf', 'pf/g', 'pa', 'pa/g', 'pd', 'mov', 'sos', 'srs', 'pyth'])
-    outcsv.writeheader()
+    outcsv = csv.writer(file_)
+    outcsv.writerow(['team', 'g', 'w', 'l', 't', 'pf', 'pa', 'w%', 'pf/g', 'pa/g', 'pd', 'mov', 'sos', 'srs', 'pyth'])
     for summary in sorted(team_summary.values(), key=lambda x: x.stats.win_rate, reverse=True):
-        outcsv.writerow({
-            'team': summary.record.team,
-            'w': summary.record.wins,
-            'l': summary.record.losses,
-            't': summary.record.ties,
-            'w%': summary.stats.win_rate,
-            'pf': summary.record.points_for,
-            'pf/g': summary.stats.points_per, 
-            'pa': summary.record.points_against,
-            'pa/g': summary.stats.against_per,
-            'pd': summary.stats.point_delta,
-            'mov': summary.stats.margin_of_victory,
-            'sos': summary.stats.strength_of_schedule,
-            'srs': summary.stats.simple_ranking,
-            'pyth': summary.stats.pythagorean,
-        })
+        record = summary.record._asdict()
+        stats = summary.stats._asdict()
+        del record['opponents']
+        del stats['team']
+        outcsv.writerow(concat([record.values(), stats.values()]))
 
 
 def write_predictions(file_, predictions):
@@ -247,10 +236,10 @@ def score_scrape(yr, wk_from, wk_to=None):
         return zip(teams, [int(scores[0]), int(scores[1])])
 
     def scrape_week(yr, week):
-        parser = compose(map(parse_game), select_games)
-        game_info = parser(html.fromstring(requests.get(URL.format(yr, week)).content))
-        for (away, home) in game_info:
-            yield Game(Scored(*away), Scored(*home), yr * 100 + week, yr, week)
+        parse = compose(map(parse_game), select_games, html.fromstring)
+        game_info = parse(requests.get(URL.format(yr, week)).content)
+        return [Game(Scored(*away), Scored(*home), yr * 100 + week, yr, week)
+                for (away, home) in game_info]
 
     def scrape_weeks(yr, wk_from, wk_to):
         step = 1 if wk_from < wk_to else -1
