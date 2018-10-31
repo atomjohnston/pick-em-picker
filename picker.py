@@ -39,7 +39,7 @@ from itertools import islice, repeat, takewhile
 from docopt import docopt
 from lxml import html
 from toolz import compose, concat, curry, flip, interleave, pipe
-from toolz.curried import filter, map, partition
+from toolz.curried import filter, first, map, partition
 
 
 Scored = namedtuple('Scored', 'team points')
@@ -233,8 +233,6 @@ def predict_winners(team_summary, games, spreads):
 get_html_from_url = compose(html.fromstring, lambda x: x.content, requests.get)
 
 def score_scrape(yr, wk_from, wk_to=None):
-    URL = 'https://www.pro-football-reference.com/years/{}/week_{}.htm'
-
     def select_games(week_xml):
         return week_xml.xpath(
             '//div[starts-with(@class,"game_summary")]/table[@class="teams"]/tbody')
@@ -246,17 +244,17 @@ def score_scrape(yr, wk_from, wk_to=None):
 
     def scrape_week(yr, week):
         parse = compose(map(parse_game), select_games, get_html_from_url)
-        game_info = parse(URL.format(yr, week))
+        game_info = parse('https://www.pro-football-reference.com/years/{}/week_{}.htm'.format(yr, week))
         return [Game(Scored(*away), Scored(*home), int(yr), int(week))
                 for (away, home) in game_info]
 
     def scrape_weeks(yr, wk_from, wk_to):
-        step = 1 if wk_from < wk_to else -1
+        start, end = int(wk_from), int(wk_to)
+        step = 1 if start < end else -1
         ex = futures.ThreadPoolExecutor(max_workers=4)
-        return sorted(ex.map(scrape_week, repeat(yr), [wk for wk in range(wk_from, wk_to + step, step)]), reverse=True)
+        return sorted(ex.map(scrape_week, repeat(yr), [wk for wk in range(start, end + step, step)]), reverse=True)
 
-    #return scrape_weeks(yr, wk_from, wk_to if wk_to else wk_from)
-    return scrape_week(yr, wk_from)
+    return scrape_weeks(yr, wk_from, wk_to if wk_to else wk_from)
 
 
 def spread_scrape(yr, wk, odds=None):
@@ -300,7 +298,7 @@ def run(outfile, opts):
     with open(opts['<records-file>'], 'r') as records:
         team_summary = pipe(records, curry(get_team_stats)('2018'),
                                      simplify)
-    predictions = predict_winners(team_summary, score_scrape(2018, 9), spread_scrape(2018, 9))
+    predictions = predict_winners(team_summary, first(score_scrape(2018, 9)), spread_scrape(2018, 9))
     write_predictions(None, predictions)
     write_summary(outfile, team_summary)
 
