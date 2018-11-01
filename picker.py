@@ -40,35 +40,38 @@ Week = namedtuple('Week', 'year week')
 Scored = namedtuple('Scored', 'team points')
 Game = namedtuple('Game', 'away home year week ')
 Record = namedtuple('Record', 'team opponents games wins losses ties points_for points_against')
-Stats = namedtuple('Stats', 'team win_rate points_per against_per point_delta margin_of_victory strength_of_schedule simple_ranking pythagorean')
+Stats = namedtuple('Stats', ('team win_rate points_per against_per point_delta margin_of_victory '
+                             'strength_of_schedule simple_ranking pythagorean'))
 Summary = namedtuple('Summary', 'team record stats')
 Pick = namedtuple('Pick', 'winner rank delta')
-Picks = namedtuple('Picks', 'id game point_spread simple_ranking simple_ranking_1 pythagorean margin_of_victory wins')
+Picks = namedtuple('Picks', ('id game point_spread simple_ranking simple_ranking_1 '
+                             'pythagorean margin_of_victory wins'))
 
 TEAM_MAP = {
     'ari': 'cardinals', 'atl': 'falcons',  'bal': 'ravens',
     'buf': 'bills',     'car': 'panthers', 'chi': 'bears',
     'cin': 'bengals',   'cle': 'browns',   'dal': 'cowboys',
-    'den': 'broncos',   'det': 'lions',    'gb': 'packers',
+    'den': 'broncos',   'det': 'lions',    'gb':  'packers',
     'hou': 'texans',    'ind': 'colts',    'jac': 'jaguars',
-    'kc': 'chiefs',     'lac': 'chargers', 'lar': 'rams',
-    'min': 'vikings',   'ne': 'patriots',  'no': 'saints',
+    'kc':  'chiefs',    'lac': 'chargers', 'lar': 'rams',
+    'min': 'vikings',   'ne':  'patriots', 'no':  'saints',
     'nyg': 'giants',    'nyj': 'jets',     'oak': 'raiders',
     'phi': 'eagles',    'pit': 'steelers', 'sea': 'seahawks',
-    'sf': '49ers',      'ten': 'titans',   'was': 'redskins',
-    'mia': 'dolphins',  'tb': 'buccaneers'
+    'sf':  '49ers',     'ten': 'titans',   'was': 'redskins',
+    'mia': 'dolphins',  'tb':  'buccaneers'
 }
 
 
 round2 = flip(round, 2)  # pylint: disable=E1120
 round3 = flip(round, 3)  # pylint: disable=E1120
 
+
 class TeamRecord(Record):
     def __add__(self, other):
         if not self.team == other.team:
             raise ValueError('cannot add {} to {}'.format(self.team, other.team))
         return TeamRecord(self.team, self.opponents + (other.opponents,),
-            *tuple(map(operator.add, self[2:], other[2:])))
+                          *tuple(map(operator.add, self[2:], other[2:])))
 
 
 def win_loss_tie(pf, pa):
@@ -79,7 +82,9 @@ def win_loss_tie(pf, pa):
 
 
 def add_stats(stats, team, opponent):
-    return stats + TeamRecord(team.team, opponent.team, 1, *win_loss_tie(team.points, opponent.points), team.points, opponent.points)
+    return stats + TeamRecord(
+        team.team, opponent.team, 1, *win_loss_tie(team.points, opponent.points),
+        team.points, opponent.points)
 
 
 def append_game(table, game):
@@ -90,7 +95,7 @@ def append_game(table, game):
 
 def dict2game(src):
     src.update({k: int(v) for (k, v) in src.items()
-                          if not k.endswith('team')})
+                if not k.endswith('team')})
     away = Scored(src.pop('away_team'), src.pop('away_points'))
     home = Scored(src.pop('home_team'), src.pop('home_points'))
     return Game(away, home, **src)
@@ -98,18 +103,18 @@ def dict2game(src):
 
 def calc(record):
     delta = record.points_for - record.points_against
-    mov = round2(delta/record.games)
+    mov = round2(delta / record.games)
     return Stats(
         record.team,
-        round3(record.wins/record.games),
-        round2(record.points_for/record.games),
-        round2(record.points_against/record.games),
-        delta,
-        mov,
-        0,
-        mov,
-        round3((record.points_for**2.37)/((record.points_for**2.37)+(record.points_against**2.37)))
+        round3(record.wins / record.games),
+        round2(record.points_for / record.games),
+        round2(record.points_against / record.games), delta, mov, 0, mov,
+        round3(calc_pythagorean(record.points_for, record.points_against))
     )
+
+
+def calc_pythagorean(pf, pa):
+    return (pf ** 2.32) / ((pf ** 2.37) + (pa ** 2.37))
 
 
 def simplify(summary):
@@ -124,8 +129,9 @@ def simplify(summary):
             stats=t_sum.stats._replace(
                 strength_of_schedule=sos,
                 simple_ranking=round2(t_sum.stats.margin_of_victory + sos)))
-    
+
     calc_drift = compose(round2, curry(max))
+
     def calculate_all(previous):
         adjustments = {name: adjust(previous, smry) for (name, smry) in previous.items()}
         drift = calc_drift([
@@ -139,7 +145,8 @@ def simplify(summary):
 
 def write_summary(file_, team_summary):
     outcsv = csv.writer(file_)
-    outcsv.writerow(['team', 'g', 'w', 'l', 't', 'pf', 'pa', 'w%', 'pf/g', 'pa/g', 'pd', 'mov', 'sos', 'srs', 'pyth'])
+    outcsv.writerow(['team', 'g', 'w', 'l', 't', 'pf', 'pa', 'w%',
+                     'pf/g', 'pa/g', 'pd', 'mov', 'sos', 'srs', 'pyth'])
     for summary in sorted(team_summary.values(), key=lambda x: x.stats.win_rate, reverse=True):
         record = summary.record._asdict()
         stats = summary.stats._asdict()
@@ -157,6 +164,7 @@ def write_game_results(file_, results):
             game.away.team, game.away.points,
             game.home.team, game.home.points
         ])
+
 
 def write_predictions(file_, predictions):
     outcsv = csv.writer(file_)
@@ -229,19 +237,20 @@ def predict_winners(team_summary, games, spreads):
         return predictions
 
     ranked = pipe(
-        [predict_all(n + 1, game, stats_for(game.away), stats_for(game.home)) 
+        [predict_all(n + 1, game, stats_for(game.away), stats_for(game.home))
          for (n, game) in enumerate(games)],
-            rank('simple_ranking'),
-            rank('simple_ranking_1'),
-            rank('point_spread'),
-            rank('pythagorean'),
-            rank('margin_of_victory'),
-            rank('wins'),
-        )
+        rank('simple_ranking'),
+        rank('simple_ranking_1'),
+        rank('point_spread'),
+        rank('pythagorean'),
+        rank('margin_of_victory'),
+        rank('wins'),
+    )
     return [Picks(**picks) for picks in ranked]
 
 
 get_html_from_url = compose(html.fromstring, lambda x: x.content, requests.get)
+
 
 def score_scrape(yr, wk_from, wk_to=None):
     def select_games(week_xml):
@@ -249,13 +258,15 @@ def score_scrape(yr, wk_from, wk_to=None):
             '//div[starts-with(@class,"game_summary")]/table[@class="teams"]/tbody')
 
     def parse_game(game_xml):
-        teams = [x.text.split()[-1].lower() for x in game_xml.xpath('tr/td/a[starts-with(@href, "/teams/")]')]
+        teams = [x.text.split()[-1].lower()
+                 for x in game_xml.xpath('tr/td/a[starts-with(@href, "/teams/")]')]
         scores = [x.text if x.text else -1 for x in game_xml.xpath('tr/td[@class="right"]')][0:2]
         return zip(teams, [int(scores[0]), int(scores[1])])
 
     def scrape_week(yr, week):
         parse = compose(map(parse_game), select_games, get_html_from_url)
-        game_info = parse('https://www.pro-football-reference.com/years/{}/week_{}.htm'.format(yr, week))
+        game_info = parse(
+            'https://www.pro-football-reference.com/years/{}/week_{}.htm'.format(yr, week))
         return [Game(Scored(*away), Scored(*home), int(yr), int(week))
                 for (away, home) in game_info]
 
@@ -287,12 +298,14 @@ def spread_scrape(yr, wk, odds=None):
     matchups = compose(lookup_nickname, partition(2))
     away_spreads = map(compose(list, lambda s: islice(s, 0, None, 2)))
     get_spreads = map(compose(convert_spreads, parse_spreads))
-    calc_spreads = compose(list, map(statistics.mean), away_spreads, filter(lambda x: len(x) > 0), get_spreads)
+    calc_spreads = compose(list, map(statistics.mean), away_spreads,
+                           filter(lambda x: len(x) > 0), get_spreads)
 
     def parse_odds_xml(p):
         team_names = [str.lower(json.loads(x.attrib['data-op-name'])['short_name'])
-                 for x in p.xpath('//div[starts-with(@class, "op-matchup-team")]')]
-        games = p.xpath('//div[@id="op-results"]')[0].xpath('div[starts-with(@class, "op-item-row-wrapper")]')
+                      for x in p.xpath('//div[starts-with(@class, "op-matchup-team")]')]
+        games = p.xpath(
+            '//div[@id="op-results"]')[0].xpath('div[starts-with(@class, "op-item-row-wrapper")]')
         return zip(matchups(team_names), calc_spreads(games))
 
     def spread2score(compare, spread):
@@ -300,7 +313,8 @@ def spread_scrape(yr, wk, odds=None):
 
     result = compose(list, parse_odds_xml, get_odds_html)(odds)
     return {
-        teams: Game(Scored(teams[0], spread2score(operator.lt, spread)), Scored(teams[1], spread2score(operator.ge, spread)), int(yr), int(wk))
+        teams: Game(Scored(teams[0], spread2score(operator.lt, spread)),
+                    Scored(teams[1], spread2score(operator.ge, spread)), int(yr), int(wk))
         for (teams, spread) in result
     }
 
@@ -311,7 +325,8 @@ def run(opts, write_fh):
                 start_date)
 
     if opts['get-results']:
-        write_game_results(write_fh, first(score_scrape(start_date.year, start_date.week, end_date.week)))
+        write_game_results(write_fh, first(score_scrape(
+            start_date.year, start_date.week, end_date.week)))
         return
 
     standings = compose(simplify, curry(get_team_stats)((start_date.year, end_date.year)))
