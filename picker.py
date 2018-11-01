@@ -43,7 +43,7 @@ Record = namedtuple('Record', 'team opponents games wins losses ties points_for 
 Stats = namedtuple('Stats', 'team win_rate points_per against_per point_delta margin_of_victory strength_of_schedule simple_ranking pythagorean')
 Summary = namedtuple('Summary', 'team record stats')
 Pick = namedtuple('Pick', 'winner rank delta')
-Picks = namedtuple('Picks', 'point_spread simple_ranking simple_ranking_1 pythagorean margin_of_victory wins')
+Picks = namedtuple('Picks', 'id game point_spread simple_ranking simple_ranking_1 pythagorean margin_of_victory wins')
 
 TEAM_MAP = {
     'ari': 'cardinals', 'atl': 'falcons',  'bal': 'ravens',
@@ -161,6 +161,7 @@ def write_game_results(file_, results):
 def write_predictions(file_, predictions):
     outcsv = csv.writer(file_)
     outcsv.writerow([
+        '#', 'away', 'home',
         'spread', 'spread_r', 'spread_d',
         'srs', 'srs_r', 'srs_d',
         'srs1', 'srs1_r', 'srs1_d',
@@ -170,6 +171,8 @@ def write_predictions(file_, predictions):
     ])
     for picks in sorted(predictions, key=lambda x: x.simple_ranking.rank, reverse=True):
         outcsv.writerow(concat([
+            [picks.id],
+            [picks.game.away.team, picks.game.home.team],
             picks.point_spread,
             picks.simple_ranking,
             picks.simple_ranking_1,
@@ -205,10 +208,12 @@ def predict_winners(team_summary, games, spreads):
         delta = n_home - n_away
         return Pick((home if delta >= 0 else away), 0, round_f(delta))
 
-    def predict_all(a_stats, h_stats):
+    def predict_all(id, game, a_stats, h_stats):
         pick = predict(a_stats.team, h_stats.team)
         point_spread = spreads[(a_stats.team, h_stats.team)]
         return dict(
+            id=id,
+            game=game,
             point_spread=pick(point_spread.away.points, point_spread.home.points),
             simple_ranking=pick(a_stats.simple_ranking, h_stats.simple_ranking),
             simple_ranking_1=pick(a_stats.simple_ranking, h_stats.simple_ranking + 2),
@@ -224,7 +229,8 @@ def predict_winners(team_summary, games, spreads):
         return predictions
 
     ranked = pipe(
-        [predict_all(stats_for(game.away), stats_for(game.home)) for game in games],
+        [predict_all(n + 1, game, stats_for(game.away), stats_for(game.home)) 
+         for (n, game) in enumerate(games)],
             rank('simple_ranking'),
             rank('simple_ranking_1'),
             rank('point_spread'),
