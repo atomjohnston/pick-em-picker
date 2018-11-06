@@ -32,7 +32,7 @@ from itertools import islice, repeat, takewhile
 
 from docopt import docopt
 from lxml import html
-from toolz import compose, concat, curry, flip, interleave, pipe
+from toolz import compose, concat, curry, flip, interleave, pipe, valmap
 from toolz.curried import filter, first, map, partition
 
 
@@ -47,6 +47,7 @@ Pick = namedtuple('Pick', 'winner rank delta')
 Picks = namedtuple('Picks', ('id game point_spread simple_ranking simple_ranking_1 '
                              'pythagorean margin_of_victory wins'))
 
+PYTH_EX = 2.37
 TEAM_MAP = {
     'ari': 'cardinals', 'atl': 'falcons',  'bal': 'ravens',
     'buf': 'bills',     'car': 'panthers', 'chi': 'bears',
@@ -114,30 +115,31 @@ def calc(record):
 
 
 def calc_pythagorean(pf, pa):
-    return (pf ** 2.32) / ((pf ** 2.37) + (pa ** 2.37))
+    return (pf ** PYTH_EX) / ((pf ** PYTH_EX) + (pa ** PYTH_EX))
 
 
 def simplify(summary):
-    calculate = compose(round2, statistics.mean)
-
-    def calc_sos(team_smry, get_opponent_srs):
-        return calculate([get_opponent_srs(name) for name in team_smry.record.opponents])
+    def update_sum_stats(smry, sos, srs):
+        return smry._replace(
+            stats=smry.stats._replace(strength_of_schedule=sos, simple_ranking=srs))
 
     def adjust(summaries, t_sum):
-        sos = calc_sos(t_sum, lambda s: summaries[s].stats.simple_ranking)
-        return t_sum._replace(
-            stats=t_sum.stats._replace(
-                strength_of_schedule=sos,
-                simple_ranking=round2(t_sum.stats.margin_of_victory + sos)))
+        sos = statistics.mean([summaries[name].stats.simple_ranking for name in t_sum.record.opponents])
+        return update_sum_stats(t_sum, sos, t_sum.stats.margin_of_victory + sos)
 
-    calc_drift = compose(round2, curry(max))
+    def correct(summaries):
+        mean = statistics.mean([x.stats.simple_ranking for x in summaries.values()])
+        return valmap(lambda s: update_sum_stats(s, s.stats.strength_of_schedule - mean, s.stats.simple_ranking - mean), summaries)
+
+    def round_all(summaries):
+        return valmap(lambda s: update_sum_stats(s, round2(s.stats.strength_of_schedule), round2(s.stats.simple_ranking)), summaries)
 
     def calculate_all(previous):
-        adjustments = {name: adjust(previous, smry) for (name, smry) in previous.items()}
-        drift = calc_drift([
+        adjustments = correct({name: adjust(previous, smry) for (name, smry) in previous.items()})
+        drift = max([
             abs(current.stats.strength_of_schedule - previous.stats.strength_of_schedule)
             for (previous, current) in zip(previous.values(), adjustments.values())])
-        return (adjustments if drift <= 0.01 else
+        return (round_all(adjustments) if drift <= 0.001 else
                 calculate_all(adjustments))
 
     return calculate_all(summary)
