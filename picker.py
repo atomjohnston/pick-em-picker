@@ -70,7 +70,7 @@ round3 = flip(round, 3)  # pylint: disable=E1120
 class TeamRecord(Record):
     def __add__(self, other):
         if not self.team == other.team:
-            raise ValueError('cannot add {} to {}'.format(self.team, other.team))
+            raise ValueError(f'cannot add {self.team} to {other.team}')
         return TeamRecord(self.team, self.opponents + (other.opponents,),
                           *tuple(map(operator.add, self[2:], other[2:])))
 
@@ -162,7 +162,7 @@ def write_game_results(file_, results):
     outcsv.writerow(['year', 'week', 'away_team', 'away_points', 'home_team', 'home_points'])
     for game in results:
         outcsv.writerow([
-            game.year, game.week,
+            game.year, f'{game.week:02}',
             game.away.team, game.away.points,
             game.home.team, game.home.points
         ])
@@ -267,8 +267,7 @@ def score_scrape(yr, wk_from, wk_to=None):
 
     def scrape_week(yr, week):
         parse = compose(map(parse_game), select_games, get_html_from_url)
-        game_info = parse(
-            'https://www.pro-football-reference.com/years/{}/week_{}.htm'.format(yr, week))
+        game_info = parse(f'https://www.pro-football-reference.com/years/{yr}/week_{week}.htm')
         return [Game(Scored(*away), Scored(*home), int(yr), int(week))
                 for (away, home) in game_info]
 
