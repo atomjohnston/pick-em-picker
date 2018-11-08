@@ -1,36 +1,20 @@
 #!/usr/bin/env python
-"""Pro Football Pick 'Em Picker
-
-
-Usage:
-  pick-em get-results <start> [<end>] [--output=CSV ]
-  pick-em standings <records-file> [<start> <end>] [--output=CSV ]
-  pick-em make-picks <records-file> <pick-week>
-                     [<start> <end>] [--spread=HTML] [--output=CSV ]
-
-Options:
-  -o CSV  --output=CSV    output to CSV file, instead of default STDOUT
-  -s HTML --spread=HTML   HTML file of OddsShark odds page
-  -h --help                display this help
-
-
-"""
 
 import csv
-import datetime
 import json
 import operator
 import statistics
 import sys
 
+import click
 import requests
 
 from collections import namedtuple
 from concurrent import futures
+from datetime import datetime
 from functools import reduce
 from itertools import islice, repeat, takewhile
 
-from docopt import docopt
 from lxml import html
 from toolz import compose, concat, curry, flip, interleave, pipe, valmap
 from toolz.curried import filter, first, map, partition
@@ -157,15 +141,16 @@ def write_summary(file_, team_summary):
         outcsv.writerow(concat([record.values(), stats.values()]))
 
 
-def write_game_results(file_, results):
+def write_game_results(file_, weeks):
     outcsv = csv.writer(file_)
     outcsv.writerow(['year', 'week', 'away_team', 'away_points', 'home_team', 'home_points'])
-    for game in results:
-        outcsv.writerow([
-            game.year, f'{game.week:02}',
-            game.away.team, game.away.points,
-            game.home.team, game.home.points
-        ])
+    for results in weeks:
+        for game in results:
+            outcsv.writerow([
+                game.year, f'{game.week:02}',
+                game.away.team, game.away.points,
+                game.home.team, game.home.points
+            ])
 
 
 def write_predictions(file_, predictions):
@@ -254,7 +239,7 @@ def predict_winners(team_summary, games, spreads):
 get_html_from_url = compose(html.fromstring, lambda x: x.content, requests.get)
 
 
-def score_scrape(yr, wk_from, wk_to=None):
+def score_scrape(weeks):
     def select_games(week_xml):
         return week_xml.xpath(
             '//div[starts-with(@class,"game_summary")]/table[@class="teams"]/tbody')
@@ -271,13 +256,8 @@ def score_scrape(yr, wk_from, wk_to=None):
         return [Game(Scored(*away), Scored(*home), int(yr), int(week))
                 for (away, home) in game_info]
 
-    def scrape_weeks(yr, wk_from, wk_to):
-        start, end = int(wk_from), int(wk_to)
-        step = 1 if start < end else -1
-        ex = futures.ThreadPoolExecutor(max_workers=4)
-        return sorted(ex.map(scrape_week, repeat(yr), [wk for wk in range(start, end + step, step)]), reverse=True)
-
-    return scrape_weeks(yr, wk_from, wk_to if wk_to else wk_from)
+    ex = futures.ThreadPoolExecutor(max_workers=4)
+    return sorted(ex.map(scrape_week, [x.year for x in weeks], [x.week for x in weeks]), key=lambda gms: gms[0].year * 100 + gms[0].week, reverse=True)
 
 
 def spread_scrape(yr, wk, odds=None):
@@ -320,45 +300,70 @@ def spread_scrape(yr, wk, odds=None):
     }
 
 
-def run(opts, write_fh):
-    start_date = parse_date(opts['<start>'])
-    end_date = (parse_date(opts['<end>']) if opts['<end>'] else
-                start_date)
+def get_weeks(s_date, e_date=None):
+    def _parse(date):
+        try:
+            x = ''.join([c for c in date if c.isdigit()])
+            return Week(int(x[:4]), int(x[4:]))
+        except:
+            return Week(datetime.now().year, 0)
 
-    if opts['get-results']:
-        write_game_results(write_fh, first(score_scrape(
-            start_date.year, start_date.week, end_date.week)))
-        return
+    def _sort(weeks):
+        return sorted(weeks, key=lambda w: w.year * 100 + w.week, reverse=True)
 
-    standings = compose(simplify, curry(get_team_stats)((start_date.year, end_date.year)))
+    start = _parse(s_date)
+    if not e_date:
+        return [start]
 
-    with open(opts['<records-file>'], 'r') as records:
-        if opts['standings']:
-            write_summary(write_fh, standings(records))
-            return
+    end = _parse(e_date)
 
-        pick_week = parse_date(opts['<pick-week>'])
-        predictions = predict_winners(
-            standings(records), first(score_scrape(*pick_week)), spread_scrape(*pick_week))
-        write_predictions(write_fh, predictions)
+    if end.year == start.year:
+        return _sort([Week(end.year, n) for n in range(end.week, start.week + 1)])
 
-
-def parse_date(date):
-    try:
-        x = ''.join([c for c in date if c.isdigit()])
-        return Week(int(x[:4]), int(x[4:]))
-    except:
-        return Week(datetime.datetime.now().year, 0)
+    return _sort(concat([
+        [Week(end.year, n) for n in range(end.week, 18)],
+        [Week(m_year, m_week) for m_week in range(1, 18) for m_year in range(end.year + 1, start.year)],
+        [Week(start.year, n) for n in range(1, start.week + 1)],
+    ]))
 
 
+@click.group()
 def main():
-    opts = docopt(__doc__)
-    write_fh = open(opts['--output'], 'w') if opts['--output'] else sys.stdout
-    try:
-        run(opts, write_fh)
-    finally:
-        if not write_fh == sys.stdout:
-            write_fh.close()
+    """Pro Football Pick 'Em Picker"""
+    pass
+
+
+@main.command()
+@click.argument('start', type=str)
+@click.option('--end', '-e', type=str, default=None, help='end week (i.e. 201706)')
+@click.option('--output', '-o', default='CSV', help='output format (default: CSV)')
+def get_results(start, end, output):
+    """get game scores for a given season and week (i.e. 201809 or 2018:9)"""
+    weeks = get_weeks(start, end)
+    write_game_results(sys.stdout, score_scrape(weeks))
+
+
+@main.command()
+@click.argument('records-file', type=click.File('r'))
+@click.option('--start', '-s', type=str, default=None, help='start week (i.e. 201706)')
+@click.option('--end', '-e', type=str, default=None, help='end week (i.e. 201706)')
+@click.option('--output', '-o', default='CSV', help='output format (default: CSV)')
+def standings(records_file, start, end, output):
+    """calculate the standings for a given range of weeks (default is this season)"""
+    summary = get_team_stats(year, records_file)
+    stats = simplify(summary)
+    write_summary(sys.stdout, stats)
+
+
+@main.command()
+@click.argument('records-file', type=click.File('r'))
+@click.option('--output', '-o', default='CSV', help='output format (default: CSV)')
+def make_picks(records_file, pick_week, start=None, end=None, spread=None, output='CSV'):
+    """predict the winners of the specified weeks games based on numerous criteria"""
+    games = first(score_scrape(*pick_week))
+    spreads = spread_scrape(*pick_week)
+    predictions = predict_winners(standings(records_file, 2018, output), games, spreads)
+    write_predictions(sys.stdout, predictions)
 
 
 if __name__ == '__main__':
