@@ -177,16 +177,20 @@ def write_predictions(file_, predictions):
         ]))
 
 
-def read_records(years, records):
-    return takewhile(lambda row: int(row['year']) in years, csv.DictReader(records))
+def read_records(weeks, records):
+    if len(weeks) > 0:
+        predicate = lambda row: Week(int(row['year']), int(row['week'])) in weeks
+    else:
+        predicate = lambda row: int(row['year']) == datetime.now().year
+    return takewhile(predicate, csv.DictReader(records))
 
 
 def init_teams():
     return {team: TeamRecord(team, (), *list(repeat(0, 6))) for team in TEAM_MAP.values()}
 
 
-def get_team_stats(season, records):
-    read_season_records = curry(read_records)(season)
+def get_team_stats(weeks, records):
+    read_season_records = curry(read_records)(weeks)
     games = compose(map(dict2game), read_season_records)(records)
     records = reduce(append_game, games, init_teams())
     return {r.team: Summary(r.team, r, calc(r)) for r in records.values()}
@@ -300,22 +304,23 @@ def spread_scrape(yr, wk, odds=None):
     }
 
 
-def get_weeks(s_date, e_date=None):
-    def _parse(date):
-        try:
-            x = ''.join([c for c in date if c.isdigit()])
-            return Week(int(x[:4]), int(x[4:]))
-        except:
-            return Week(datetime.now().year, 0)
+def parse_week(date):
+    try:
+        x = ''.join([c for c in date if c.isdigit()])
+        return Week(int(x[:4]), int(x[4:]))
+    except:
+        return Week(datetime.now().year, 0)
 
+
+def get_weeks(s_date, e_date=None):
     def _sort(weeks):
         return sorted(weeks, key=lambda w: w.year * 100 + w.week, reverse=True)
 
-    start = _parse(s_date)
+    start = parse_week(s_date)
     if not e_date:
         return [start]
 
-    end = _parse(e_date)
+    end = parse_week(e_date)
 
     if end.year == start.year:
         return _sort([Week(end.year, n) for n in range(end.week, start.week + 1)])
@@ -325,6 +330,10 @@ def get_weeks(s_date, e_date=None):
         [Week(m_year, m_week) for m_week in range(1, 18) for m_year in range(end.year + 1, start.year)],
         [Week(start.year, n) for n in range(1, start.week + 1)],
     ]))
+
+
+def calc_standings(records_file, weeks):
+    return simplify(get_team_stats(weeks, records_file))
 
 
 @click.group()
@@ -339,8 +348,7 @@ def main():
 @click.option('--output', '-o', default='CSV', help='output format (default: CSV)')
 def get_results(start, end, output):
     """get game scores for a given season and week (i.e. 201809 or 2018:9)"""
-    weeks = get_weeks(start, end)
-    write_game_results(sys.stdout, score_scrape(weeks))
+    write_game_results(sys.stdout, score_scrape(get_weeks(start, end)))
 
 
 @main.command()
@@ -350,20 +358,23 @@ def get_results(start, end, output):
 @click.option('--output', '-o', default='CSV', help='output format (default: CSV)')
 def standings(records_file, start, end, output):
     """calculate the standings for a given range of weeks (default is this season)"""
-    summary = get_team_stats(year, records_file)
-    stats = simplify(summary)
-    write_summary(sys.stdout, stats)
+    write_summary(sys.stdout, calc_standings(records_file, [] if not start else get_weeks(start, end)))
 
 
 @main.command()
 @click.argument('records-file', type=click.File('r'))
+@click.argument('pick-week', type=str)
+@click.option('--end', '-e', type=str, default=None, help='end week (i.e. 201706)')
+@click.option('--spread', default=None, help='HTML with OddsShark spreads')
 @click.option('--output', '-o', default='CSV', help='output format (default: CSV)')
-def make_picks(records_file, pick_week, start=None, end=None, spread=None, output='CSV'):
+def make_picks(records_file, pick_week, end, spread, output):
     """predict the winners of the specified weeks games based on numerous criteria"""
-    games = first(score_scrape(*pick_week))
-    spreads = spread_scrape(*pick_week)
-    predictions = predict_winners(standings(records_file, 2018, output), games, spreads)
-    write_predictions(sys.stdout, predictions)
+    to_pick = parse_week(pick_week)
+    write_predictions(sys.stdout, predict_winners(
+        calc_standings(records_file, [] if not end else get_weeks(pick_week, end)),
+        first(score_scrape([to_pick])),
+        spread_scrape(*to_pick),
+        ))
 
 
 if __name__ == '__main__':
