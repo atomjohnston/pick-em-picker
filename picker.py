@@ -28,7 +28,7 @@ Stats = namedtuple('Stats', ('team win_rate points_per against_per point_delta m
                              'strength_of_schedule simple_ranking pythagorean'))
 Summary = namedtuple('Summary', 'team record stats')
 Pick = namedtuple('Pick', 'winner rank delta')
-Picks = namedtuple('Picks', ('id game point_spread simple_ranking simple_ranking_1 '
+Picks = namedtuple('Picks', ('id game point_spread point_spread_1 simple_ranking simple_ranking_1 '
                              'pythagorean margin_of_victory wins'))
 
 PYTH_EX = 2.37
@@ -90,11 +90,15 @@ def calc(record):
     delta = record.points_for - record.points_against
     mov = round2(delta / record.games)
     return Stats(
-        record.team,
-        round3(record.wins / record.games),
-        round2(record.points_for / record.games),
-        round2(record.points_against / record.games), delta, mov, 0, mov,
-        round3(calc_pythagorean(record.points_for, record.points_against))
+        record.team, # team
+        round3(record.wins / record.games), # win_rate
+        round2(record.points_for / record.games), # points_per
+        round2(record.points_against / record.games), # against_per
+        delta, # point_delta
+        mov, # margin_of_victory
+        (mov * -1), # strength_of_schedule
+        0, # simple_ranking
+        round3(calc_pythagorean(record.points_for, record.points_against)) # pythagorean
     )
 
 
@@ -158,6 +162,7 @@ def write_predictions(file_, predictions):
     outcsv.writerow([
         '#', 'away', 'home',
         'spread', 'spread_r', 'spread_d',
+        'spread_m', 'spread_m_r', 'spread_m_d',
         'srs', 'srs_r', 'srs_d',
         'srs1', 'srs1_r', 'srs1_d',
         'pyth', 'pyth_r', 'pyth_d',
@@ -169,6 +174,7 @@ def write_predictions(file_, predictions):
             [picks.id],
             [picks.game.away.team, picks.game.home.team],
             picks.point_spread,
+            picks.point_spread_1,
             picks.simple_ranking,
             picks.simple_ranking_1,
             picks.pythagorean,
@@ -189,14 +195,14 @@ def init_teams():
     return {team: TeamRecord(team, (), *list(repeat(0, 6))) for team in TEAM_MAP.values()}
 
 
-def get_team_stats(weeks, records):
+def get_team_stats(weeks, records_file):
     read_season_records = curry(read_records)(weeks)
-    games = compose(map(dict2game), read_season_records)(records)
+    games = compose(map(dict2game), read_season_records)(records_file)
     records = reduce(append_game, games, init_teams())
     return {r.team: Summary(r.team, r, calc(r)) for r in records.values()}
 
 
-def predict_winners(team_summary, games, spreads):
+def predict_winners(team_summary, games, spreads_avg, spreads_med):
     # pylint: disable=E1120,E1102
 
     def stats_for(team):
@@ -209,11 +215,13 @@ def predict_winners(team_summary, games, spreads):
 
     def predict_all(id, game, a_stats, h_stats):
         pick = predict(a_stats.team, h_stats.team)
-        point_spread = spreads[(a_stats.team, h_stats.team)]
+        point_spread = spreads_avg[(a_stats.team, h_stats.team)]
+        point_spread_m = spreads_med[(a_stats.team, h_stats.team)]
         return dict(
             id=id,
             game=game,
             point_spread=pick(point_spread.away.points, point_spread.home.points),
+            point_spread_1=pick(point_spread_m.away.points, point_spread_m.home.points),
             simple_ranking=pick(a_stats.simple_ranking, h_stats.simple_ranking),
             simple_ranking_1=pick(a_stats.simple_ranking, h_stats.simple_ranking + 2),
             pythagorean=pick(a_stats.pythagorean, h_stats.pythagorean, round3),
@@ -233,6 +241,7 @@ def predict_winners(team_summary, games, spreads):
         rank('simple_ranking'),
         rank('simple_ranking_1'),
         rank('point_spread'),
+        rank('point_spread_1'),
         rank('pythagorean'),
         rank('margin_of_victory'),
         rank('wins'),
@@ -281,27 +290,33 @@ def spread_scrape(yr, wk, odds=None):
 
     lookup_nickname = map(lambda x: (TEAM_MAP[x[0]], TEAM_MAP[x[1]]))
     matchups = compose(lookup_nickname, partition(2))
-    away_spreads = map(compose(list, lambda s: islice(s, 0, None, 2)))
     get_spreads = map(compose(convert_spreads, parse_spreads))
-    calc_spreads = compose(list, map(statistics.mean), away_spreads,
-                           filter(lambda x: len(x) > 0), get_spreads)
+    get_away_spreads = compose(map(compose(list, lambda s: islice(s, 0, None, 2))), filter(lambda x: len(x) > 0), get_spreads)
+    calc_spreads_avg = compose(list, map(statistics.mean), get_away_spreads)
+    calc_spreads_med = compose(list, map(statistics.median), get_away_spreads)
 
-    def parse_odds_xml(p):
+    def parse_odds_xml(p, avg=True):
         team_names = [str.lower(json.loads(x.attrib['data-op-name'])['short_name'])
                       for x in p.xpath('//div[starts-with(@class, "op-matchup-team")]')]
+        # print(team_names)
         games = p.xpath(
             '//div[@id="op-results"]')[0].xpath('div[starts-with(@class, "op-item-row-wrapper")]')
-        return zip(matchups(team_names), calc_spreads(games))
+        # print(games)
+        calc = calc_spreads_avg if avg else calc_spreads_med
+        return zip(matchups(team_names), calc(games))
 
     def spread2score(compare, spread):
         return round2(abs(spread) if compare(spread, 0) else 0)
 
-    result = compose(list, parse_odds_xml, get_odds_html)(odds)
-    return {
-        teams: Game(Scored(teams[0], spread2score(operator.lt, spread)),
-                    Scored(teams[1], spread2score(operator.ge, spread)), int(yr), int(wk))
-        for (teams, spread) in result
-    }
+    def spread_dict(spreads):
+        return {
+            teams: Game(Scored(teams[0], spread2score(operator.lt, spread)),
+                        Scored(teams[1], spread2score(operator.ge, spread)), int(yr), int(wk))
+            for (teams, spread) in spreads 
+        }
+
+    html = get_odds_html(odds)
+    return spread_dict(list(parse_odds_xml(html, True))), spread_dict(list(parse_odds_xml(html, False)))
 
 
 def parse_week(date):
@@ -373,7 +388,7 @@ def make_picks(records_file, pick_week, end, spread, output):
     write_predictions(sys.stdout, predict_winners(
         calc_standings(records_file, [] if not end else get_weeks(pick_week, end)),
         first(score_scrape([to_pick])),
-        spread_scrape(*to_pick),
+        *spread_scrape(*to_pick),
         ))
 
 
