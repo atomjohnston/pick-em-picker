@@ -86,7 +86,14 @@ def dict2game(src):
     return Game(away, home, **src)
 
 
+def calc_home_field(games):
+    a_h = [(g.away.points, g.home.points) for g in games]
+    points = tuple(reduce(map(operator.add), a_h, (0, 0)))
+    return (points[1] / len(a_h)) - (points[0] / len(a_h))
+
+
 def calc(record):
+    # print('record', record)
     delta = record.points_for - record.points_against
     mov = round2(delta / record.games)
     return Stats(
@@ -127,6 +134,8 @@ def simplify(summary):
         drift = max([
             abs(current.stats.strength_of_schedule - previous.stats.strength_of_schedule)
             for (previous, current) in zip(previous.values(), adjustments.values())])
+        #return round_all(adjustments)
+        # print(drift)
         return (round_all(adjustments) if drift <= 0.001 else
                 calculate_all(adjustments))
 
@@ -195,15 +204,19 @@ def init_teams():
     return {team: TeamRecord(team, (), *list(repeat(0, 6))) for team in TEAM_MAP.values()}
 
 
-def get_team_stats(weeks, records_file):
+def get_games(weeks, records_file):
     read_season_records = curry(read_records)(weeks)
-    games = compose(map(dict2game), read_season_records)(records_file)
+    return compose(map(dict2game), read_season_records)(records_file)
+
+
+def get_team_stats(games):
     records = reduce(append_game, games, init_teams())
     return {r.team: Summary(r.team, r, calc(r)) for r in records.values()}
 
 
-def predict_winners(team_summary, games, spreads_avg, spreads_med):
+def predict_winners(team_summary, games, spreads_avg, spreads_med, home_field):
     # pylint: disable=E1120,E1102
+    print('home field advantage is', home_field, 'points')
 
     def stats_for(team):
         return team_summary[team.team].stats
@@ -223,7 +236,7 @@ def predict_winners(team_summary, games, spreads_avg, spreads_med):
             point_spread=pick(point_spread.away.points, point_spread.home.points),
             point_spread_1=pick(point_spread_m.away.points, point_spread_m.home.points),
             simple_ranking=pick(a_stats.simple_ranking, h_stats.simple_ranking),
-            simple_ranking_1=pick(a_stats.simple_ranking, h_stats.simple_ranking + 2),
+            simple_ranking_1=pick(a_stats.simple_ranking, h_stats.simple_ranking + home_field),
             pythagorean=pick(a_stats.pythagorean, h_stats.pythagorean, round3),
             margin_of_victory=pick(a_stats.margin_of_victory, h_stats.margin_of_victory),
             wins=pick(a_stats.win_rate, h_stats.win_rate, round3),
@@ -265,6 +278,7 @@ def score_scrape(weeks):
 
     def scrape_week(yr, week):
         parse = compose(map(parse_game), select_games, get_html_from_url)
+        # print(f'https://www.pro-football-reference.com/years/{yr}/week_{week}.htm')
         game_info = parse(f'https://www.pro-football-reference.com/years/{yr}/week_{week}.htm')
         return [Game(Scored(*away), Scored(*home), int(yr), int(week))
                 for (away, home) in game_info]
@@ -347,8 +361,11 @@ def get_weeks(s_date, e_date=None):
     ]))
 
 
-def calc_standings(records_file, weeks):
-    return simplify(get_team_stats(weeks, records_file))
+def calc_standings(games):
+    # print(weeks)
+    #if len(weeks) == 1:
+        #return get_team_stats(weeks, records_file)
+    return simplify(get_team_stats(games))
 
 
 @click.group()
@@ -373,7 +390,7 @@ def get_results(start, end, output):
 @click.option('--output', '-o', default='CSV', help='output format (default: CSV)')
 def standings(records_file, start, end, output):
     """calculate the standings for a given range of weeks (default is this season)"""
-    write_summary(sys.stdout, calc_standings(records_file, [] if not start else get_weeks(start, end)))
+    write_summary(sys.stdout, calc_standings(get_games([] if not start else get_weeks(start, end), records_file)))
 
 
 @main.command()
@@ -385,10 +402,12 @@ def standings(records_file, start, end, output):
 def make_picks(records_file, pick_week, end, spread, output):
     """predict the winners of the specified weeks games based on numerous criteria"""
     to_pick = parse_week(pick_week)
+    games = list(get_games([] if not end else get_weeks(pick_week, end), records_file))
     write_predictions(sys.stdout, predict_winners(
-        calc_standings(records_file, [] if not end else get_weeks(pick_week, end)),
+        calc_standings(games),
         first(score_scrape([to_pick])),
         *spread_scrape(*to_pick),
+        calc_home_field(games),
         ))
 
 
