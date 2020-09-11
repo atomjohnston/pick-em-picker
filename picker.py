@@ -39,10 +39,10 @@ TEAM_MAP = {
     'den': 'broncos',   'det': 'lions',    'gb':  'packers',
     'hou': 'texans',    'ind': 'colts',    'jac': 'jaguars',
     'kc':  'chiefs',    'lac': 'chargers', 'lar': 'rams',
-    'min': 'vikings',   'ne':  'patriots', 'no':  'saints',
-    'nyg': 'giants',    'nyj': 'jets',     'oak': 'raiders',
+    'lv':  'raiders',   'min': 'vikings',  'ne':  'patriots',
+    'no':  'saints',    'nyg': 'giants',   'nyj': 'jets',
     'phi': 'eagles',    'pit': 'steelers', 'sea': 'seahawks',
-    'sf':  '49ers',     'ten': 'titans',   'was': 'redskins',
+    'sf':  '49ers',     'ten': 'titans',   'was': 'washington',
     'mia': 'dolphins',  'tb':  'buccaneers'
 }
 
@@ -296,8 +296,10 @@ def spread_scrape(yr, wk, odds=None):
             return html.fromstring(f.read())
 
     def parse_spreads(g):
-        return [json.loads(x.attrib['data-op-info'])['fullgame']
-                for x in g.xpath('div/div[starts-with(@class, "op-item op-spread")]')]
+        return [
+            json.loads(x.attrib['data-op-info'])['fullgame']
+            for x in g.xpath('div/div/div[starts-with(@class, "op-item op-spread")]')
+        ]
 
     def convert_spreads(diffs):
         return [0 if n == 'Ev' else float(n) for n in diffs if not n == '']
@@ -305,18 +307,22 @@ def spread_scrape(yr, wk, odds=None):
     lookup_nickname = map(lambda x: (TEAM_MAP[x[0]], TEAM_MAP[x[1]]))
     matchups = compose(lookup_nickname, partition(2))
     get_spreads = map(compose(convert_spreads, parse_spreads))
-    get_away_spreads = compose(map(compose(list, lambda s: islice(s, 0, None, 2))), filter(lambda x: len(x) > 0), get_spreads)
+    get_away_spreads = compose(
+        map(compose(list, lambda s: islice(s, 0, None, 2))),
+        filter(lambda x: len(x) > 0),
+        get_spreads,
+    )
     calc_spreads_avg = compose(list, map(statistics.mean), get_away_spreads)
     calc_spreads_med = compose(list, map(statistics.median), get_away_spreads)
 
-    def parse_odds_xml(p, avg=True):
-        team_names = [str.lower(json.loads(x.attrib['data-op-name'])['short_name'])
-                      for x in p.xpath('//div[starts-with(@class, "op-matchup-team")]')]
-        # print(team_names)
+    def parse_odds_xml(p, calc):
+        team_names = [
+            str.lower(json.loads(x.attrib['data-op-name'])['short_name'])
+            for x in p.xpath('//div[contains(@class, "op-matchup-team")]')
+            if 'data-op-name' in x.attrib
+        ]
         games = p.xpath(
             '//div[@id="op-results"]')[0].xpath('div[starts-with(@class, "op-item-row-wrapper")]')
-        # print(games)
-        calc = calc_spreads_avg if avg else calc_spreads_med
         return zip(matchups(team_names), calc(games))
 
     def spread2score(compare, spread):
@@ -324,13 +330,20 @@ def spread_scrape(yr, wk, odds=None):
 
     def spread_dict(spreads):
         return {
-            teams: Game(Scored(teams[0], spread2score(operator.lt, spread)),
-                        Scored(teams[1], spread2score(operator.ge, spread)), int(yr), int(wk))
+            teams: Game(
+                Scored(teams[0], spread2score(operator.lt, spread)),
+                Scored(teams[1], spread2score(operator.ge, spread)),
+                int(yr),
+                int(wk),
+            )
             for (teams, spread) in spreads 
         }
 
     html = get_odds_html(odds)
-    return spread_dict(list(parse_odds_xml(html, True))), spread_dict(list(parse_odds_xml(html, False)))
+    return (
+        spread_dict(list(parse_odds_xml(html, calc_spreads_avg))),
+        spread_dict(list(parse_odds_xml(html, calc_spreads_med)))
+    )
 
 
 def parse_week(date):
@@ -403,12 +416,31 @@ def make_picks(records_file, pick_week, end, spread, output):
     """predict the winners of the specified weeks games based on numerous criteria"""
     to_pick = parse_week(pick_week)
     games = list(get_games([] if not end else get_weeks(pick_week, end), records_file))
-    write_predictions(sys.stdout, predict_winners(
-        calc_standings(games),
-        first(score_scrape([to_pick])),
-        *spread_scrape(*to_pick),
-        calc_home_field(games),
-        ))
+    write_predictions(
+        sys.stdout,
+        predict_winners(
+            calc_standings(games),
+            first(score_scrape([to_pick])),
+            *spread_scrape(*to_pick),
+            calc_home_field(games),
+        )
+    )
+
+
+@main.command()
+@click.argument('pick-week', type=str)
+def spreads(pick_week):
+    averages, medians = spread_scrape(*parse_week(pick_week))
+    result = []
+    for k, v in averages.items():
+        key = 'away' if v.away.points > 0 else 'home'
+        winner = v._asdict()[key]
+        result.append((winner.team, winner.points, medians[k]._asdict()[key].points))
+    print(f'winner      median  average')
+    print(f'---------------------------')
+    for v in sorted(result, key=lambda a: (a[2], a[1]), reverse=True):
+        winner, avg, median = v
+        print(f'{winner:<12}{median:<7}{avg:5.2f}')
 
 
 if __name__ == '__main__':
