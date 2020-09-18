@@ -327,25 +327,32 @@ def spread_scrape(yr, wk, odds=None):
             '//div[@id="op-results"]')[0].xpath('div[starts-with(@class, "op-item-row-wrapper")]')
         return zip(matchups(team_names), calc(games))
 
-    def spread2score(compare, spread):
-        return round2(abs(spread) if compare(spread, 0) else 0)
-
-    def spread_dict(spreads):
-        return {
-            teams: Game(
-                Scored(teams[0], spread2score(operator.lt, spread)),
-                Scored(teams[1], spread2score(operator.ge, spread)),
-                int(yr),
-                int(wk),
-            )
-            for (teams, spread) in spreads 
-        }
-
     html = get_odds_html(odds)
     return (
-        spread_dict(list(parse_odds_xml(html, calc_spreads_avg))),
-        spread_dict(list(parse_odds_xml(html, calc_spreads_med)))
+        spread_dict(yr, wk, list(parse_odds_xml(html, calc_spreads_avg))),
+        spread_dict(yr, wk, list(parse_odds_xml(html, calc_spreads_med))),
     )
+
+
+def spread2score(compare, spread):
+    return round2(abs(spread) if compare(spread, 0) else 0)
+
+
+def spread_dict(yr, wk, spreads):
+    return {
+        teams: Game(
+            Scored(teams[0], spread2score(operator.lt, spread)),
+            Scored(teams[1], spread2score(operator.ge, spread)),
+            int(yr),
+            int(wk),
+        )
+        for (teams, spread) in spreads
+    }
+
+
+def mock_spreads(yr, wk, games):
+    result = spread_dict(yr, wk, [((g.away.team, g.home.team), 0) for g in games])
+    return (result, result)
 
 
 def parse_week(date):
@@ -377,8 +384,6 @@ def get_weeks(s_date, e_date=None):
 
 
 def calc_standings(games):
-    #if len(weeks) == 1:
-        #return get_team_stats(weeks, records_file)
     return simplify(get_team_stats(games))
 
 
@@ -411,18 +416,20 @@ def standings(records_file, start, end, output):
 @click.argument('records-file', type=click.File('r'))
 @click.argument('pick-week', type=str)
 @click.option('--end', '-e', type=str, default=None, help='end week (i.e. 201706)')
-@click.option('--spread', default=None, help='HTML with OddsShark spreads')
+@click.option('--spread-html', default=None, help='HTML with OddsShark spreads')
+@click.option('--no-spread', is_flag=True, help="don't rank spreads")
 @click.option('--output', '-o', default='CSV', help='output format (default: CSV)')
-def make_picks(records_file, pick_week, end, spread, output):
+def make_picks(records_file, pick_week, end, spread_html, no_spread, output):
     """predict the winners of the specified weeks games based on numerous criteria"""
     to_pick = parse_week(pick_week)
     games = list(get_games([] if not end else get_weeks(pick_week, end), records_file))
+    this_week = first(score_scrape([to_pick]))
     write_predictions(
         sys.stdout,
         predict_winners(
             calc_standings(games),
-            first(score_scrape([to_pick])),
-            *spread_scrape(*to_pick),
+            this_week,
+            *spread_scrape(*to_pick) if not no_spread else mock_spreads(*to_pick, this_week),
             calc_home_field(games),
         )
     )
