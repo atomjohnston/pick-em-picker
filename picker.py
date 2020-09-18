@@ -42,7 +42,7 @@ TEAM_MAP = {
     'lv':  'raiders',   'min': 'vikings',  'ne':  'patriots',
     'no':  'saints',    'nyg': 'giants',   'nyj': 'jets',
     'phi': 'eagles',    'pit': 'steelers', 'sea': 'seahawks',
-    'sf':  '49ers',     'ten': 'titans',   'was': 'washington',
+    'sf':  '49ers',     'ten': 'titans',   'was': 'team',
     'mia': 'dolphins',  'tb':  'buccaneers'
 }
 
@@ -93,7 +93,6 @@ def calc_home_field(games):
 
 
 def calc(record):
-    # print('record', record)
     delta = record.points_for - record.points_against
     mov = round2(delta / record.games)
     return Stats(
@@ -130,14 +129,17 @@ def simplify(summary):
         return valmap(lambda s: update_sum_stats(s, round2(s.stats.strength_of_schedule), round2(s.stats.simple_ranking)), summaries)
 
     def calculate_all(previous):
-        adjustments = correct({name: adjust(previous, smry) for (name, smry) in previous.items()})
-        drift = max([
-            abs(current.stats.strength_of_schedule - previous.stats.strength_of_schedule)
-            for (previous, current) in zip(previous.values(), adjustments.values())])
-        #return round_all(adjustments)
-        # print(drift)
-        return (round_all(adjustments) if drift <= 0.001 else
-                calculate_all(adjustments))
+        p_drift = None
+        while True:
+            adjustments = correct({name: adjust(previous, smry) for (name, smry) in previous.items()})
+            drift = max([
+                abs(current.stats.strength_of_schedule - previous.stats.strength_of_schedule)
+                for (previous, current) in zip(previous.values(), adjustments.values())
+            ])
+            if drift <= 0.001 or drift == p_drift:
+                return round_all(adjustments)
+            previous = adjustments
+            p_drift = drift
 
     return calculate_all(summary)
 
@@ -375,7 +377,6 @@ def get_weeks(s_date, e_date=None):
 
 
 def calc_standings(games):
-    # print(weeks)
     #if len(weeks) == 1:
         #return get_team_stats(weeks, records_file)
     return simplify(get_team_stats(games))
