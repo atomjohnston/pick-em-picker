@@ -7,6 +7,7 @@ import statistics
 import sys
 
 import click
+import numpy as np
 import requests
 
 from collections import namedtuple
@@ -139,8 +140,8 @@ def calc(record):
         round2(record.points_against / record.games),  # against_per
         delta,  # point_delta
         mov,  # margin_of_victory
-        (mov * -1),  # strength_of_schedule
-        0,  # simple_ranking
+        0,  # strength_of_schedule
+        mov,  # simple_ranking
         round3(calc_pythagorean(record.points_for, record.points_against)),  # pythagorean
     )
 
@@ -150,22 +151,24 @@ def calc_pythagorean(pf, pa):
 
 
 def simplify(summary):
-    def update_sum_stats(smry, sos, srs):
+    def update_sum_stats(from_, smry, sos, srs):
         return smry._replace(
             stats=smry.stats._replace(strength_of_schedule=sos, simple_ranking=srs)
         )
 
     def adjust(summaries, t_sum):
-        sos = statistics.mean(
-            [summaries[name].stats.simple_ranking for name in t_sum.record.opponents]
-        )
-        return update_sum_stats(t_sum, sos, t_sum.stats.margin_of_victory + sos)
+        opps = [summaries[name].stats.simple_ranking for name in t_sum.record.opponents]
+        sos = statistics.mean(opps)
+        # if t_sum.team == 'patriots':
+        #     print(opps, 'sos:', sos)
+        return update_sum_stats('adjust', t_sum, sos, t_sum.stats.margin_of_victory + sos)
 
     def correct(summaries):
         mean = statistics.mean([x.stats.simple_ranking for x in summaries.values()])
+        #print('corrected mean', mean)
         return valmap(
             lambda s: update_sum_stats(
-                s, s.stats.strength_of_schedule - mean, s.stats.simple_ranking - mean
+                'correct', s, s.stats.strength_of_schedule - mean, s.stats.simple_ranking - mean
             ),
             summaries,
         )
@@ -173,14 +176,14 @@ def simplify(summary):
     def round_all(summaries):
         return valmap(
             lambda s: update_sum_stats(
-                s, round2(s.stats.strength_of_schedule), round2(s.stats.simple_ranking)
+                'round_all', s, round2(s.stats.strength_of_schedule), round2(s.stats.simple_ranking)
             ),
             summaries,
         )
 
     def calculate_all(previous):
         p_drift = None
-        while True:
+        for n in range(9999):
             adjustments = correct(
                 {name: adjust(previous, smry) for (name, smry) in previous.items()}
             )
@@ -190,12 +193,102 @@ def simplify(summary):
                     for (previous, current) in zip(previous.values(), adjustments.values())
                 ]
             )
-            if drift <= 0.001 or drift == p_drift:
+            print(n, drift)
+            if drift <= 0.0001:
                 return round_all(adjustments)
             previous = adjustments
-            p_drift = drift
+        return round_all(adjustments)
 
+    def r_calculate_all(i, previous):
+        #print(i, 'previous', previous['patriots'].stats.strength_of_schedule, previous['patriots'].stats.simple_ranking, previous['patriots'].stats.margin_of_victory)
+        adjustments = correct({name: adjust(previous, smry) for (name, smry) in previous.items()})
+        #print(i, 'adjustments', adjustments['patriots'].stats.strength_of_schedule, adjustments['patriots'].stats.simple_ranking, adjustments['patriots'].stats.margin_of_victory)
+        drift = max(
+            [
+                abs(current.stats.strength_of_schedule - previous.stats.strength_of_schedule)
+                for (previous, current) in zip(previous.values(), adjustments.values())
+            ]
+        )
+        #return round_all(adjustments)
+        #print(i, '; '.join([f"{k}|{v.stats.simple_ranking}|{round2(v.stats.strength_of_schedule)}" for k, v in previous.items()]))
+        print(i, '; '.join([f"{k}|{round2(v.stats.simple_ranking)}|{round2(v.stats.strength_of_schedule)}" for k, v in adjustments.items()]))
+        try:
+            return (round_all(adjustments) if drift <= 0.001 else
+                    r_calculate_all(i + 1, adjustments))
+        except RecursionError:
+            return round_all(adjustments)
+
+    #return r_calculate_all(1, summary)
     return calculate_all(summary)
+
+
+def fancy_srs(teams):
+    #first matrix with the coefficients of each of the variables
+    terms = []
+
+    #second matrix with the constant term (-average spread)
+    solutions = []
+    
+    for name in sorted(teams.keys()):
+        #add in a row for each team
+        team = teams[name]
+        row = []
+        
+        #rating = average spread + average opponent rating
+        #-> -average spread = -rating + average opponent rating
+        #-> -average spread = -rating + (number of opponents/1) * (opponent 1 rating+opponent 2 rating...)
+        #each row of the matrix describes right side equation
+        for o_name in sorted(teams.keys()):
+            opp = teams[o_name]
+            if opp.team == team.team:
+                row.append(1)
+            elif opp.team in team.record.opponents:
+                row.append(-1.0/len(team.record.opponents))
+            else:
+                row.append(0)
+        terms.append(row)
+        
+        #each row of this matrix describes the left side of the above equation
+        solutions.append(team.stats.margin_of_victory)
+    
+    #solve the simultaneous equations using numpy
+    for l in terms:
+        print(l)
+    print(solutions)
+    solutions = np.linalg.solve(np.array(terms), np.array(solutions))
+    sys.exit(0)
+
+def simple_ranking(somery, correct = True, debug = False):
+    tptr = {
+        k: {
+            'point_spread': v.stats.margin_of_victory,
+            'played': v.record.opponents,
+        }
+        for k, v in somery.items()
+    }
+    for k in tptr:
+        #tptr[k]['mov'] = tptr[k]['point_spread']/float(len(tptr[k]['played']))
+        tptr[k]['mov'] = tptr[k]['point_spread']
+        tptr[k]['srs'] = tptr[k]['mov']
+        tptr[k]['sos'] = 0.0
+    delta = 10.0
+    while delta > 0.001:
+        delta = 0.0
+        print(tptr['patriots'])
+        for k in tptr:
+            sos = statistics.mean([tptr[g]['srs'] for g in tptr[k]['played']])
+            tptr[k]['srs'] = tptr[k]['mov'] + sos
+            newdelta = abs(sos - tptr[k]['sos'])
+            tptr[k]['sos'] = sos
+            delta = max(delta, newdelta)
+        print(tptr['patriots'])
+    #if correct:
+    #    srs_correction( tptr )
+    #if debug:
+    #print("iters = {0:d}".format(iters)) 
+    #print(tptr)
+    sys.exit(0)
+    return True
 
 
 def write_summary(file_, team_summary):
@@ -501,6 +594,9 @@ def get_weeks(s_date, e_date=None):
 
 
 def calc_standings(games):
+    #print(calc_home_field(games))
+    #return simple_ranking(get_team_stats(games))
+    #return fancy_srs(get_team_stats(games))
     return simplify(get_team_stats(games))
 
 
@@ -539,11 +635,19 @@ def standings(records_file, start, end, output):
 @click.option("--spread-html", default=None, help="HTML with OddsShark spreads")
 @click.option("--no-spread", is_flag=True, help="don't rank spreads")
 @click.option("--output", "-o", default="CSV", help="output format (default: CSV)")
-def make_picks(records_file, pick_week, end, spread_html, no_spread, output):
+@click.option("--exclude", "-x", default=None)
+def make_picks(records_file, pick_week, end, spread_html, no_spread, output, exclude):
     """predict the winners of the specified weeks games based on numerous criteria"""
     to_pick = parse_week(pick_week)
     games = list(get_games([] if not end else get_weeks(pick_week, end), records_file))
-    this_week = first(score_scrape([to_pick]))
+    # make a set to dedup, sometimes there are mistakes on the website
+    to_play = set(first(score_scrape([to_pick])))
+    if exclude:
+        excludes = set([tuple(s.split(':')) for s in exclude.split(',')])
+        this_week = [game for game in to_play if (game.away.team, game.home.team) not in excludes]
+    else:
+        this_week = to_play
+
     write_predictions(
         sys.stdout,
         predict_winners(
@@ -563,12 +667,12 @@ def spreads(pick_week):
     for k, v in averages.items():
         key = "away" if v.away.points > 0 else "home"
         winner = v._asdict()[key]
-        result.append((winner.team, winner.points, medians[k]._asdict()[key].points))
+        result.append((winner.team, winner.points, medians[k]._asdict()[key].points, (v.away.team, v.home.team)))
     print(f"winner      median  average")
     print(f"---------------------------")
     for v in sorted(result, key=lambda a: (a[2], a[1]), reverse=True):
-        winner, avg, median = v
-        print(f"{winner:<12}{median:<7}{avg:5.2f}")
+        winner, avg, median, matchup = v
+        print(f"{winner:<12}{median:<7}{avg:5.2f}", matchup)
 
 
 if __name__ == "__main__":

@@ -1,3 +1,5 @@
 click
+lxml
+numpy
 requests
 toolz
